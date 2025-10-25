@@ -123,7 +123,7 @@ class BlueprintListView(HomeAssistantView):
         sort = (request.query.get("sort") or "new").strip()
         bucket = (request.query.get("bucket") or "").strip().lower()
 
-        items: List[Dict[str, Any]] = []
+        items: List[Dict[str, Any]]] = []
         has_more = False
 
         try:
@@ -234,7 +234,8 @@ def _mount_static(app, prefix: str, folder: Path) -> None:
     """Mount a static folder under prefix (ignore if already mounted)."""
     try:
         app.router.add_static(prefix, str(folder), show_index=False)
-    except Exception:  # already mounted or invalid -> ignore
+    except Exception:
+        # already added or invalid path — ignore
         pass
 
 
@@ -248,32 +249,32 @@ async def _register_panel_and_static(hass: HomeAssistant) -> None:
     _mount_static(app, STATIC_URL_PREFIX, panel_dir)
     _mount_static(app, f"{STATIC_URL_PREFIX}/images", images_dir)
 
-    # Panel HTML view
+    # Serve our SPA shell (panel/index.html) via /api/blueprint_store/ui
     hass.http.register_view(PanelHtmlView(panel_dir))
 
-    # Sidebar panel — NOTE the parameter name is frontend_url_path in this HA version.
     try:
+        # NOTE: this HA build expects frontend_url_path (not url_path)
         async_register_built_in_panel(
             hass,
             component_name="iframe",
             sidebar_title=PANEL_TITLE,
             sidebar_icon=PANEL_ICON,
-            frontend_url_path=PANEL_URL_PATH,  # <— fix
+            frontend_url_path=PANEL_URL_PATH,
             config={"url": f"{API_BASE}/ui"},
             require_admin=False,
             update=True,
         )
     except Exception as exc:  # noqa: BLE001
         _LOGGER.exception("Failed to register sidebar panel: %s", exc)
-        # In this HA version async_remove_panel is NOT a coroutine.
         try:
-            async_remove_panel(hass, PANEL_URL_PATH)  # <— do not await
+            # In this version async_remove_panel is NOT a coroutine
+            async_remove_panel(hass, PANEL_URL_PATH)
             async_register_built_in_panel(
                 hass,
                 component_name="iframe",
                 sidebar_title=PANEL_TITLE,
                 sidebar_icon=PANEL_ICON,
-                frontend_url_path=PANEL_URL_PATH,  # <— fix
+                frontend_url_path=PANEL_URL_PATH,
                 config={"url": f"{API_BASE}/ui"},
                 require_admin=False,
                 update=True,
@@ -289,10 +290,10 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
         await _register_panel_and_static(hass)
-    except Exception:  # noqa: BLE001
+    except Exception:
         _LOGGER.exception("Panel/static registration failed; continuing so API still works")
 
-    # API views required by the frontend
+    # REST views for the front-end
     hass.http.register_view(BlueprintListView())
     hass.http.register_view(FiltersView())
     hass.http.register_view(TopicView())
