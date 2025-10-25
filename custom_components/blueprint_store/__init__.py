@@ -70,7 +70,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # API routes
     app = hass.http.app
 
-    # Blueprints data and helpers
     app.router.add_get("/api/blueprint_store/blueprints", lambda req: api_blueprints(hass, req))
     app.router.add_get("/api/blueprint_store/topic", lambda req: api_topic(hass, req))
     app.router.add_get("/api/blueprint_store/filters", lambda req: api_filters(hass, req))
@@ -79,7 +78,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Static images (logo/banner)
     app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
 
-    # Panel index and **all panel assets** (app.js, css, etc.)
+    # Panel index and ALL panel assets (JS/CSS/etc.)
     app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel_index(hass, req))
     app.router.add_get("/api/blueprint_store/panel/{res:.*}", lambda req: serve_panel_asset(hass, req))
 
@@ -91,11 +90,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             component_name="iframe",
             sidebar_title="Blueprint Store",
-            sidebar_icon="mdi:storefront",  # built-in store icon
+            sidebar_icon="mdi:storefront",
             frontend_url_path="blueprint_store",
             config={"url": "/api/blueprint_store/panel"},
             require_admin=False,
-            update=True,  # update if already exists
+            update=True,
         )
         _LOGGER.debug("Blueprint Store: sidebar panel registered/updated")
     except Exception as e:  # noqa: BLE001
@@ -123,7 +122,7 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
         "tags": t.get("tags") or [],
         "like_count": t.get("like_count") or 0,
         "posts_count": t.get("posts_count") or t.get("last_post_number") or 1,
-        "import_url": None,   # filled when /topic is called
+        "import_url": None,
         "bucket": None,
         "uses": None,
         "install_count": None,
@@ -131,7 +130,6 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _bucket_for_tags(tags: List[str]) -> Optional[str]:
-    # Refined logical set (incl. AI); "automation" intentionally omitted.
     CURATED = [
         "lighting", "climate", "presence", "security", "media",
         "energy", "camera", "alarm", "notifications", "tts",
@@ -149,10 +147,6 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
 
 # ---------------- API views ----------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
-    """
-    Category endpoint; optional filters applied locally.
-    Also resilient to empty pages.
-    """
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
 
@@ -166,7 +160,6 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
     if cached:
         return web.json_response(cached)
 
-    # try canonical category JSON; if empty, try latest view
     urls = [
         f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true",
         f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
@@ -196,7 +189,6 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
         items.sort(key=lambda x: x.get("title", "").lower())
     elif sort == "likes":
         items.sort(key=lambda x: int(x.get("like_count") or 0), reverse=True)
-    # "new" -> keep server order
 
     result = {
         "items": items,
@@ -224,7 +216,6 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
     posts = (data.get("post_stream") or {}).get("posts") or []
     cooked = posts[0].get("cooked") if posts else ""
 
-    # Import button URL inside cooked HTML (if present)
     m = re.search(
         r'(https?://my\.home-assistant\.io/redirect/blueprint_import[^"\'\s<>]+)',
         cooked or "",
@@ -232,7 +223,6 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
     )
     import_url = m.group(1) if m else None
 
-    # Best-effort install count near badge
     install_count = None
     if cooked and m:
         after = cooked.split(m.group(1), 1)[-1]
@@ -255,7 +245,6 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
 
 
 async def api_filters(hass: HomeAssistant, request: web.Request):
-    # Stable curated set so the dropdown always has content
     tags = [
         "lighting", "climate", "presence", "security", "media",
         "energy", "camera", "alarm", "notifications", "tts",
@@ -302,7 +291,6 @@ async def serve_panel_index(hass: HomeAssistant, request: web.Request):
 
 
 async def serve_panel_asset(hass: HomeAssistant, request: web.Request):
-    # Serve any file under panel/ (e.g. app.js, css, images referenced relatively)
     res = (request.match_info.get("res") or "").lstrip("/")
     base = Path(hass.config.path("custom_components/blueprint_store/panel"))
     fpath = (base / res) if res else (base / "index.html")
