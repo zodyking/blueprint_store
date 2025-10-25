@@ -166,3 +166,108 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
         if q_title and q_title not in (item["title"] or "").lower():
             continue
         if bucket and (item["bucket"] or "") != bucket:
+            continue
+        items.append(item)
+
+    if sort == "title":
+        items.sort(key=lambda x: x.get("title", "").lower())
+    elif sort == "likes":
+        items.sort(key=lambda x: int(x.get("like_count") or 0), reverse=True)
+    # "new" is server order; leave as-is
+
+    result = {
+        "items": items,
+        "has_more": bool((data.get("topic_list") or {}).get("more_topics_url")),
+    }
+    await cache.set(key, result, ttl=120)
+    return web.json_response(result)
+
+
+async def api_topic(hass: HomeAssistant, request: web.Request):
+    session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
+    cache: TTLCache = hass.data[DOMAIN]["cache"]
+
+    tid = request.rel_url.query.get("id")
+    if not tid:
+        return web.json_response({"error": "missing id"}, status=400)
+
+    key = f"topic:{tid}"
+    cached = await cache.get(key)
+    if cached:
+        return web.json_response(cached)
+
+    data = await _json(session, f"{BASE}/t/{tid}.json")
+
+    posts = (data.get("post_stream") or {}).get("posts") or []
+    cooked = posts[0].get("cooked") if posts else ""
+
+    # Import button URL inside cooked HTML (if present)
+    m = re.search(
+        r'(https?://my\.home-assistant\.io/redirect/blueprint_import[^"\'\s<>]+)',
+        cooked or "",
+        re.I,
+    )
+    import_url = m.group(1) if m else None
+
+    # Best-effort install count shown near the badge
+    install_count = None
+    if cooked and m:
+        after = cooked.split(m.group(1), 1)[-1]
+        m2 = re.search(r'>(\s*[\d\.,]+(?:\s*[kKmM])?)\s*</', after or "")
+        if m2:
+            txt = (m2.group(1) or "").strip().lower().replace(",", "")
+            mul = 1
+            if txt.endswith("k"):
+                mul, txt = 1000, txt[:-1]
+            if txt.endswith("m"):
+                mul, txt = 1_000_000, txt[:-1]
+            try:
+                install_count = int(float(txt) * mul)
+            except Exception:  # noqa: BLE001
+                pass
+
+    out = {"cooked": cooked, "import_url": import_url, "install_count": install_count}
+    await cache.set(key, out, ttl=86400)
+    return web.json_response(out)
+
+
+async def api_filters(hass: HomeAssistant, request: web.Request):
+    """
+    Return a fixed, non-empty curated tag set (matches the earlier working UI).
+    """
+    tags = [
+        "lighting", "climate", "presence", "security", "media",
+        "energy", "camera", "notifications", "tts", "switches",
+        "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"
+    ]
+    return web.json_response({"tags": tags})
+
+
+async def api_go(_: HomeAssistant, request: web.Request):
+    tid = request.rel_url.query.get("tid")
+    slug = request.rel_url.query.get("slug") or ""
+    if not tid:
+        return web.Response(status=400, text="Missing tid")
+    url = f"{BASE}/t/{slug}/{tid}"
+    raise web.HTTPFound(url)
+
+
+async def serve_image(hass: HomeAssistant, request: web.Request):
+    fname = request.match_info.get("fname") or ""
+    base = Path(hass.config.path("custom_components/blueprint_store/images")).resolve()
+    fpath = (base / fname).resolve()
+    try:
+        if not str(fpath).startswith(str(base)):
+            raise FileNotFoundError()
+        if not fpath.exists() or not fpath.is_file():
+            raise FileNotFoundError()
+        return web.FileResponse(path=fpath)
+    except FileNotFoundError:
+        return web.Response(status=404, text="Not found")
+
+
+async def serve_panel(hass: HomeAssistant, request: web.Request):
+    fpath = (Path(hass.config.path("custom_components/blueprint_store/panel")) / "index.html").resolve()
+    if not fpath.exists():
+        return web.Response(text="<h3>Blueprint Store panel is missing.</h3>", content_type="text/html")
+    return web.FileResponse(path=fpath)
