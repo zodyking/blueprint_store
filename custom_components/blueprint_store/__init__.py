@@ -69,14 +69,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # API routes
     app = hass.http.app
+
+    # Blueprints data and helpers
     app.router.add_get("/api/blueprint_store/blueprints", lambda req: api_blueprints(hass, req))
     app.router.add_get("/api/blueprint_store/topic", lambda req: api_topic(hass, req))
     app.router.add_get("/api/blueprint_store/filters", lambda req: api_filters(hass, req))
     app.router.add_get("/api/blueprint_store/go", lambda req: api_go(hass, req))
-    app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
-    app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel(hass, req))
 
-    # Sidebar panel (iframe) – update if exists, otherwise create (no remove call).
+    # Static images (logo/banner)
+    app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
+
+    # Panel index and **all panel assets** (app.js, css, etc.)
+    app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel_index(hass, req))
+    app.router.add_get("/api/blueprint_store/panel/{res:.*}", lambda req: serve_panel_asset(hass, req))
+
+    # Sidebar panel as iframe
     try:
         from homeassistant.components import frontend
 
@@ -84,11 +91,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             component_name="iframe",
             sidebar_title="Blueprint Store",
-            sidebar_icon="mdi:storefront",  # store-like icon built into HA
+            sidebar_icon="mdi:storefront",  # built-in store icon
             frontend_url_path="blueprint_store",
             config={"url": "/api/blueprint_store/panel"},
             require_admin=False,
-            update=True,
+            update=True,  # update if already exists
         )
         _LOGGER.debug("Blueprint Store: sidebar panel registered/updated")
     except Exception as e:  # noqa: BLE001
@@ -124,7 +131,7 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _bucket_for_tags(tags: List[str]) -> Optional[str]:
-    # Refined set you asked for (logical buckets + AI, no "automation").
+    # Refined logical set (incl. AI); "automation" intentionally omitted.
     CURATED = [
         "lighting", "climate", "presence", "security", "media",
         "energy", "camera", "alarm", "notifications", "tts",
@@ -143,7 +150,8 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
 # ---------------- API views ----------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
     """
-    Known-good category endpoint; optional filters applied locally.
+    Category endpoint; optional filters applied locally.
+    Also resilient to empty pages.
     """
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
@@ -158,9 +166,21 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
     if cached:
         return web.json_response(cached)
 
-    url = f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true"
-    data = await _json(session, url)
-    topics = (data.get("topic_list") or {}).get("topics") or []
+    # try canonical category JSON; if empty, try latest view
+    urls = [
+        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true",
+        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
+    ]
+    topics = []
+    data = {}
+    for url in urls:
+        try:
+            data = await _json(session, url)
+            topics = (data.get("topic_list") or {}).get("topics") or []
+            if topics:
+                break
+        except Exception as e:  # noqa: BLE001
+            _LOGGER.warning("Blueprint Store: fetch page failed %s: %s", url, e)
 
     items: List[Dict[str, Any]] = []
     for t in topics:
@@ -176,7 +196,7 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
         items.sort(key=lambda x: x.get("title", "").lower())
     elif sort == "likes":
         items.sort(key=lambda x: int(x.get("like_count") or 0), reverse=True)
-    # "new" is server order; leave as-is
+    # "new" -> keep server order
 
     result = {
         "items": items,
@@ -212,7 +232,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
     )
     import_url = m.group(1) if m else None
 
-    # Best-effort install count shown near the badge
+    # Best-effort install count near badge
     install_count = None
     if cooked and m:
         after = cooked.split(m.group(1), 1)[-1]
@@ -235,9 +255,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
 
 
 async def api_filters(hass: HomeAssistant, request: web.Request):
-    """
-    Return the refined curated tag set (stable, non-empty).
-    """
+    # Stable curated set so the dropdown always has content
     tags = [
         "lighting", "climate", "presence", "security", "media",
         "energy", "camera", "alarm", "notifications", "tts",
@@ -258,22 +276,36 @@ async def api_go(_: HomeAssistant, request: web.Request):
     raise web.HTTPFound(url)
 
 
+# ---------------- static serving ----------------
+def _safe_under(base: Path, path: Path) -> bool:
+    try:
+        return str(path.resolve()).startswith(str(base.resolve()))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 async def serve_image(hass: HomeAssistant, request: web.Request):
     fname = request.match_info.get("fname") or ""
-    base = Path(hass.config.path("custom_components/blueprint_store/images")).resolve()
-    fpath = (base / fname).resolve()
-    try:
-        if not str(fpath).startswith(str(base)):
-            raise FileNotFoundError()
-        if not fpath.exists() or not fpath.is_file():
-            raise FileNotFoundError()
-        return web.FileResponse(path=fpath)
-    except FileNotFoundError:
+    base = Path(hass.config.path("custom_components/blueprint_store/images"))
+    fpath = (base / fname)
+    if not _safe_under(base, fpath) or not fpath.exists() or not fpath.is_file():
         return web.Response(status=404, text="Not found")
+    return web.FileResponse(path=fpath)
 
 
-async def serve_panel(hass: HomeAssistant, request: web.Request):
-    fpath = (Path(hass.config.path("custom_components/blueprint_store/panel")) / "index.html").resolve()
+async def serve_panel_index(hass: HomeAssistant, request: web.Request):
+    base = Path(hass.config.path("custom_components/blueprint_store/panel"))
+    fpath = base / "index.html"
     if not fpath.exists():
         return web.Response(text="<h3>Blueprint Store panel is missing.</h3>", content_type="text/html")
+    return web.FileResponse(path=fpath)
+
+
+async def serve_panel_asset(hass: HomeAssistant, request: web.Request):
+    # Serve any file under panel/ (e.g. app.js, css, images referenced relatively)
+    res = (request.match_info.get("res") or "").lstrip("/")
+    base = Path(hass.config.path("custom_components/blueprint_store/panel"))
+    fpath = (base / res) if res else (base / "index.html")
+    if not _safe_under(base, fpath) or not fpath.exists() or not fpath.is_file():
+        return web.Response(status=404, text="Not found")
     return web.FileResponse(path=fpath)
