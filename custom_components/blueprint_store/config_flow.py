@@ -1,34 +1,17 @@
-# custom_components/blueprint_store/config_flow.py
 from __future__ import annotations
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
-from homeassistant.core import callback
+from homeassistant import config_entries
+from homeassistant.data_entry_flow import FlowResult
 
-DOMAIN = "blueprint_store"
+from .const import DOMAIN
 
 
-class BlueprintStoreConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Simple single-instance config flow (no fields)."""
+class BlueprintStoreConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Allow adding Blueprint Store from UI."""
 
     VERSION = 1
 
-    async def async_step_user(self, user_input=None):
-        # Allow only one instance
-        if any(entry.domain == DOMAIN for entry in self._async_current_entries()):
-            return self.async_abort(reason="single_instance_allowed")
+    async def async_step_user(self, user_input=None) -> FlowResult:
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
         return self.async_create_entry(title="Blueprint Store", data={})
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
-        return BlueprintStoreOptionsFlow(config_entry)
-
-
-class BlueprintStoreOptionsFlow(OptionsFlow):
-    """No-op options (placeholder for future)."""
-
-    def __init__(self, entry: ConfigEntry) -> None:
-        self._entry = entry
-
-    async def async_step_init(self, user_input=None):
-        return self.async_create_entry(title="", data={})
