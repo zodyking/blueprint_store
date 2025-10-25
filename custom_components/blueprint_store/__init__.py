@@ -76,7 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
     app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel(hass, req))
 
-    # Sidebar panel (iframe) – update if exists, otherwise create.
+    # Sidebar panel (iframe) – update if exists, otherwise create (no remove call).
     try:
         from homeassistant.components import frontend
 
@@ -84,7 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             component_name="iframe",
             sidebar_title="Blueprint Store",
-            sidebar_icon="mdi:storefront",  # store-like icon
+            sidebar_icon="mdi:storefront",  # store-like icon built into HA
             frontend_url_path="blueprint_store",
             config={"url": "/api/blueprint_store/panel"},
             require_admin=False,
@@ -103,32 +103,6 @@ async def _json(session: aiohttp.ClientSession, url: str, *, timeout=25) -> Any:
         async with session.get(url, headers={"User-Agent": "BlueprintStore/0.4"}) as resp:
             resp.raise_for_status()
             return await resp.json()
-
-
-async def _fetch_category_page(session: aiohttp.ClientSession, page: int) -> dict:
-    """
-    Use the endpoint that worked for you originally and keep robust fallbacks.
-    """
-    candidates = [
-        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true",
-        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
-        f"{BASE}/c/blueprints-exchange.json?page={page}",
-    ]
-    last_err: Optional[Exception] = None
-    for u in candidates:
-        try:
-            data = await _json(session, u)
-            topics = (data.get("topic_list") or {}).get("topics") or []
-            if topics:
-                if u != candidates[0]:
-                    _LOGGER.debug("Fetched category via fallback: %s", u)
-                return data
-        except Exception as e:  # noqa: BLE001
-            last_err = e
-            _LOGGER.debug("Fetch failed %s: %s", u, e)
-    if last_err:
-        raise last_err
-    return {"topic_list": {"topics": []}}
 
 
 def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
@@ -164,6 +138,9 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
 
 # ---------------- API views ----------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
+    """
+    Original working category endpoint; optional filters applied locally.
+    """
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
 
@@ -177,12 +154,9 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
     if cached:
         return web.json_response(cached)
 
-    try:
-        data = await _fetch_category_page(session, page)
-    except Exception as e:  # noqa: BLE001
-        _LOGGER.error("Blueprint Store: category fetch failed: %s", e)
-        return web.json_response({"items": [], "has_more": False, "error": str(e)}, status=502)
-
+    # Original, known-good endpoint
+    url = f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true"
+    data = await _json(session, url)
     topics = (data.get("topic_list") or {}).get("topics") or []
 
     items: List[Dict[str, Any]] = []
@@ -192,130 +166,3 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
         if q_title and q_title not in (item["title"] or "").lower():
             continue
         if bucket and (item["bucket"] or "") != bucket:
-            continue
-        items.append(item)
-
-    if sort == "title":
-        items.sort(key=lambda x: x.get("title", "").lower())
-    elif sort == "likes":
-        items.sort(key=lambda x: int(x.get("like_count") or 0), reverse=True)
-
-    result = {
-        "items": items,
-        "has_more": bool((data.get("topic_list") or {}).get("more_topics_url")),
-    }
-    await cache.set(key, result, ttl=120)
-    return web.json_response(result)
-
-
-async def api_topic(hass: HomeAssistant, request: web.Request):
-    session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
-    cache: TTLCache = hass.data[DOMAIN]["cache"]
-
-    tid = request.rel_url.query.get("id")
-    if not tid:
-        return web.json_response({"error": "missing id"}, status=400)
-
-    key = f"topic:{tid}"
-    cached = await cache.get(key)
-    if cached:
-        return web.json_response(cached)
-
-    data = await _json(session, f"{BASE}/t/{tid}.json")
-
-    posts = (data.get("post_stream") or {}).get("posts") or []
-    cooked = posts[0].get("cooked") if posts else ""
-
-    # import button URL inside cooked HTML
-    m = re.search(
-        r'(https?://my\.home-assistant\.io/redirect/blueprint_import[^"\'\s<>]+)',
-        cooked or "",
-        re.I,
-    )
-    import_url = m.group(1) if m else None
-
-    # best-effort install count shown next to the badge in the post
-    install_count = None
-    if cooked and m:
-        after = cooked.split(m.group(1), 1)[-1]
-        m2 = re.search(r'>(\s*[\d\.,]+(?:\s*[kKmM])?)\s*</', after or "")
-        if m2:
-            txt = (m2.group(1) or "").strip().lower().replace(",", "")
-            mul = 1
-            if txt.endswith("k"):
-                mul, txt = 1000, txt[:-1]
-            if txt.endswith("m"):
-                mul, txt = 1_000_000, txt[:-1]
-            try:
-                install_count = int(float(txt) * mul)
-            except Exception:  # noqa: BLE001
-                pass
-
-    out = {"cooked": cooked, "import_url": import_url, "install_count": install_count}
-    await cache.set(key, out, ttl=86400)
-    return web.json_response(out)
-
-
-async def api_filters(hass: HomeAssistant, request: web.Request):
-    """
-    Always return a non-empty tag list. We combine a curated base with
-    whatever appears on the first category page to keep it relevant.
-    """
-    session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
-
-    curated = [
-        "lighting", "climate", "presence", "security", "media",
-        "energy", "camera", "notifications", "tts", "switches",
-        "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"
-    ]
-
-    dynamic: List[str] = []
-    try:
-        first = await _fetch_category_page(session, 0)
-        for t in (first.get("topic_list") or {}).get("topics") or []:
-            for tag in (t.get("tags") or []):
-                if tag not in dynamic:
-                    dynamic.append(tag)
-    except Exception:
-        pass  # curated still provides a good set
-
-    # de-dupe, keep curated order first
-    seen = set()
-    tags: List[str] = []
-    for lst in (curated, dynamic):
-        for tag in lst:
-            if tag not in seen:
-                tags.append(tag)
-                seen.add(tag)
-
-    return web.json_response({"tags": tags})
-
-
-async def api_go(_: HomeAssistant, request: web.Request):
-    tid = request.rel_url.query.get("tid")
-    slug = request.rel_url.query.get("slug") or ""
-    if not tid:
-        return web.Response(status=400, text="Missing tid")
-    url = f"{BASE}/t/{slug}/{tid}"
-    raise web.HTTPFound(url)
-
-
-async def serve_image(hass: HomeAssistant, request: web.Request):
-    fname = request.match_info.get("fname") or ""
-    base = Path(hass.config.path("custom_components/blueprint_store/images")).resolve()
-    fpath = (base / fname).resolve()
-    try:
-        if not str(fpath).startswith(str(base)):
-            raise FileNotFoundError()
-        if not fpath.exists() or not fpath.is_file():
-            raise FileNotFoundError()
-        return web.FileResponse(path=fpath)
-    except FileNotFoundError:
-        return web.Response(status=404, text="Not found")
-
-
-async def serve_panel(hass: HomeAssistant, request: web.Request):
-    fpath = (Path(hass.config.path("custom_components/blueprint_store/panel")) / "index.html").resolve()
-    if not fpath.exists():
-        return web.Response(text="<h3>Blueprint Store panel is missing.</h3>", content_type="text/html")
-    return web.FileResponse(path=fpath)
