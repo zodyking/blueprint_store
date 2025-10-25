@@ -1,4 +1,3 @@
-# custom_components/blueprint_store/__init__.py
 from __future__ import annotations
 
 import asyncio
@@ -17,17 +16,13 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-# -------------------------------------------------------------------
-# Constants & logging
-# -------------------------------------------------------------------
 DOMAIN = "blueprint_store"
 BASE = "https://community.home-assistant.io"
 CATEGORY_ID = 53  # Blueprints Exchange
 _LOGGER = logging.getLogger(__name__)
 
-# -------------------------------------------------------------------
-# Simple TTL cache
-# -------------------------------------------------------------------
+
+# ---------------- TTL cache ----------------
 @dataclass
 class CacheItem:
     value: Any
@@ -58,9 +53,7 @@ class TTLCache:
             )
 
 
-# -------------------------------------------------------------------
-# HA entry points
-# -------------------------------------------------------------------
+# ---------------- HA entry points ----------------
 async def async_setup(hass: HomeAssistant, config: dict):
     return True
 
@@ -82,14 +75,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
     app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel(hass, req))
 
-    # Sidebar panel (iframe) — use frontend_url_path (NOT url_path)
+    # Sidebar panel (iframe)
     try:
         from homeassistant.components import frontend
-
-        # Remove any pre-existing panel to avoid "Overwriting panel ..." ValueError
         try:
             frontend.async_remove_panel(hass, "blueprint_store")
-        except Exception:  # noqa: BLE001 - defensive
+        except Exception:
             pass
 
         frontend.async_register_built_in_panel(
@@ -102,20 +93,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             require_admin=False,
         )
         _LOGGER.debug("Blueprint Store: sidebar panel registered")
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         _LOGGER.error("Blueprint Store: failed to register sidebar panel: %s", e)
 
     return True
 
 
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
+# ---------------- helpers ----------------
 async def _json(session: aiohttp.ClientSession, url: str, *, timeout=20) -> Any:
     async with async_timeout.timeout(timeout):
         async with session.get(url, headers={"User-Agent": "BlueprintStore/0.4"}) as resp:
             resp.raise_for_status()
             return await resp.json()
+
+
+async def _fetch_category_page(session: aiohttp.ClientSession, page: int) -> dict:
+    """
+    Discourse exposes multiple variants. Try a few, return the first that works.
+    """
+    candidates = [
+        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true",  # legacy
+        f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",               # latest feed
+        f"{BASE}/c/blueprints-exchange.json?page={page}",                                      # slug-only
+    ]
+    last_err = None
+    for u in candidates:
+        try:
+            data = await _json(session, u)
+            # must contain topic_list.topics for our code path
+            if (data.get("topic_list") or {}).get("topics"):
+                _LOGGER.debug("Fetched category via %s", u)
+                return data
+            _LOGGER.debug("Endpoint returned but empty topics: %s", u)
+        except Exception as e:
+            last_err = e
+            _LOGGER.debug("Fetch failed %s: %s", u, e)
+    if last_err:
+        raise last_err
+    return {"topic_list": {"topics": []}}
 
 
 def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
@@ -129,7 +144,7 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
         "tags": t.get("tags") or [],
         "like_count": t.get("like_count") or 0,
         "posts_count": t.get("posts_count") or t.get("last_post_number") or 1,
-        "import_url": None,   # filled when post is expanded by /topic
+        "import_url": None,   # filled by /topic
         "bucket": None,
         "uses": None,
         "install_count": None,
@@ -149,9 +164,7 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
     return "other" if tags else None
 
 
-# -------------------------------------------------------------------
-# API views
-# -------------------------------------------------------------------
+# ---------------- API views ----------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
@@ -166,8 +179,12 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
     if cached:
         return web.json_response(cached)
 
-    url = f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true"
-    data = await _json(session, url)
+    try:
+        data = await _fetch_category_page(session, page)
+    except Exception as e:
+        _LOGGER.error("Blueprint Store: category fetch failed: %s", e)
+        return web.json_response({"items": [], "has_more": False, "error": str(e)}, status=502)
+
     topics = (data.get("topic_list") or {}).get("topics") or []
 
     items: List[Dict[str, Any]] = []
@@ -180,7 +197,6 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
             continue
         items.append(item)
 
-    # Sorting
     if sort == "title":
         items.sort(key=lambda x: x.get("title", "").lower())
     elif sort == "likes":
@@ -221,7 +237,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
     )
     import_url = m.group(1) if m else None
 
-    # best-effort: parse "X users" that sometimes appears near the badge
+    # best-effort install count next to the badge (if present)
     install_count = None
     if cooked and m:
         after = cooked.split(m.group(1), 1)[-1]
@@ -235,7 +251,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
                 mul, txt = 1_000_000, txt[:-1]
             try:
                 install_count = int(float(txt) * mul)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     out = {"cooked": cooked, "import_url": import_url, "install_count": install_count}
