@@ -1,3 +1,4 @@
+# custom_components/blueprint_store/__init__.py
 from __future__ import annotations
 
 import asyncio
@@ -75,7 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
     app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel(hass, req))
 
-    # Sidebar panel (iframe) – use update=True instead of removing first
+    # Sidebar panel (iframe) – update if exists, otherwise create.
     try:
         from homeassistant.components import frontend
 
@@ -83,11 +84,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass,
             component_name="iframe",
             sidebar_title="Blueprint Store",
-            sidebar_icon="mdi:blueprint",
+            sidebar_icon="mdi:storefront",  # store-like icon
             frontend_url_path="blueprint_store",
             config={"url": "/api/blueprint_store/panel"},
             require_admin=False,
-            update=True,  # prevents "Overwriting panel" + avoids "Removing unknown panel" warning
+            update=True,
         )
         _LOGGER.debug("Blueprint Store: sidebar panel registered/updated")
     except Exception as e:  # noqa: BLE001
@@ -106,12 +107,10 @@ async def _json(session: aiohttp.ClientSession, url: str, *, timeout=25) -> Any:
 
 async def _fetch_category_page(session: aiohttp.ClientSession, page: int) -> dict:
     """
-    Restore the original working endpoint and keep robust fallbacks.
+    Use the endpoint that worked for you originally and keep robust fallbacks.
     """
     candidates = [
-        # original (worked for you before)
         f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true",
-        # common alternates, just in case
         f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
         f"{BASE}/c/blueprints-exchange.json?page={page}",
     ]
@@ -235,7 +234,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
     )
     import_url = m.group(1) if m else None
 
-    # best-effort install count next to the badge (if present)
+    # best-effort install count shown next to the badge in the post
     install_count = None
     if cooked and m:
         after = cooked.split(m.group(1), 1)[-1]
@@ -278,8 +277,7 @@ async def api_filters(hass: HomeAssistant, request: web.Request):
                 if tag not in dynamic:
                     dynamic.append(tag)
     except Exception:
-        # fine — we still have curated
-        pass
+        pass  # curated still provides a good set
 
     # de-dupe, keep curated order first
     seen = set()
