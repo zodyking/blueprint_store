@@ -1,7 +1,7 @@
 {
   "domain": "blueprint_store",
   "name": "Blueprint Store",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "documentation": "https://github.com/zodyking/blueprint_store",
   "issue_tracker": "https://github.com/zodyking/blueprint_store/issues",
   "codeowners": ["@zodyking"],
