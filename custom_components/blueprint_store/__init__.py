@@ -1,6 +1,8 @@
+# custom_components/blueprint_store/__init__.py
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from dataclasses import dataclass
 from datetime import timedelta, datetime
@@ -15,12 +17,17 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+# -------------------------------------------------------------------
+# Constants & logging
+# -------------------------------------------------------------------
 DOMAIN = "blueprint_store"
-
 BASE = "https://community.home-assistant.io"
 CATEGORY_ID = 53  # Blueprints Exchange
+_LOGGER = logging.getLogger(__name__)
 
-
+# -------------------------------------------------------------------
+# Simple TTL cache
+# -------------------------------------------------------------------
 @dataclass
 class CacheItem:
     value: Any
@@ -28,7 +35,7 @@ class CacheItem:
 
 
 class TTLCache:
-    def __init__(self, ttl: int = 3600):
+    def __init__(self, ttl: int = 3600) -> None:
         self._data: Dict[str, CacheItem] = {}
         self._ttl = ttl
         self._lock = asyncio.Lock()
@@ -45,9 +52,15 @@ class TTLCache:
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None):
         async with self._lock:
-            self._data[key] = CacheItem(value=value, expires=datetime.utcnow() + timedelta(seconds=ttl or self._ttl))
+            self._data[key] = CacheItem(
+                value=value,
+                expires=datetime.utcnow() + timedelta(seconds=ttl or self._ttl),
+            )
 
 
+# -------------------------------------------------------------------
+# HA entry points
+# -------------------------------------------------------------------
 async def async_setup(hass: HomeAssistant, config: dict):
     return True
 
@@ -60,7 +73,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     hass.data[DOMAIN]["session"] = session
     hass.data[DOMAIN]["cache"] = cache
 
-    # --- routes ---
+    # API routes
     app = hass.http.app
     app.router.add_get("/api/blueprint_store/blueprints", lambda req: api_blueprints(hass, req))
     app.router.add_get("/api/blueprint_store/topic", lambda req: api_topic(hass, req))
@@ -69,27 +82,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     app.router.add_get("/blueprint_store_static/images/{fname:.*}", lambda req: serve_image(hass, req))
     app.router.add_get("/api/blueprint_store/panel", lambda req: serve_panel(hass, req))
 
-    # --- register a sidebar panel that iframes our panel url ---
+    # Sidebar panel (iframe) — use frontend_url_path (NOT url_path)
     try:
         from homeassistant.components import frontend
+
+        # Remove any pre-existing panel to avoid "Overwriting panel ..." ValueError
+        try:
+            frontend.async_remove_panel(hass, "blueprint_store")
+        except Exception:  # noqa: BLE001 - defensive
+            pass
+
         frontend.async_register_built_in_panel(
             hass,
             component_name="iframe",
             sidebar_title="Blueprint Store",
             sidebar_icon="mdi:blueprint",
-            url_path="blueprint_store",
+            frontend_url_path="blueprint_store",
             config={"url": "/api/blueprint_store/panel"},
             require_admin=False,
-            update=True,
         )
-    except Exception as e:
-        hass.logger.error("Blueprint Store: failed to register sidebar panel: %s", e)
+        _LOGGER.debug("Blueprint Store: sidebar panel registered")
+    except Exception as e:  # noqa: BLE001
+        _LOGGER.error("Blueprint Store: failed to register sidebar panel: %s", e)
 
     return True
 
 
-# ---------------- helpers ----------------
-
+# -------------------------------------------------------------------
+# Helpers
+# -------------------------------------------------------------------
 async def _json(session: aiohttp.ClientSession, url: str, *, timeout=20) -> Any:
     async with async_timeout.timeout(timeout):
         async with session.get(url, headers={"User-Agent": "BlueprintStore/0.4"}) as resp:
@@ -108,9 +129,10 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
         "tags": t.get("tags") or [],
         "like_count": t.get("like_count") or 0,
         "posts_count": t.get("posts_count") or t.get("last_post_number") or 1,
-        "import_url": None,
+        "import_url": None,   # filled when post is expanded by /topic
         "bucket": None,
         "uses": None,
+        "install_count": None,
     }
 
 
@@ -127,11 +149,9 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
     return "other" if tags else None
 
 
-# ---------------- API views ----------------
-
-BASE = "https://community.home-assistant.io"
-CATEGORY_ID = 53
-
+# -------------------------------------------------------------------
+# API views
+# -------------------------------------------------------------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
@@ -160,12 +180,16 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
             continue
         items.append(item)
 
+    # Sorting
     if sort == "title":
         items.sort(key=lambda x: x.get("title", "").lower())
     elif sort == "likes":
         items.sort(key=lambda x: int(x.get("like_count") or 0), reverse=True)
 
-    result = {"items": items, "has_more": bool(data.get("topic_list", {}).get("more_topics_url"))}
+    result = {
+        "items": items,
+        "has_more": bool((data.get("topic_list") or {}).get("more_topics_url")),
+    }
     await cache.set(key, result, ttl=120)
     return web.json_response(result)
 
@@ -188,11 +212,16 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
 
     posts = (data.get("post_stream") or {}).get("posts") or []
     cooked = posts[0].get("cooked") if posts else ""
-    import_url = None
-    m = re.search(r'(https?://my\.home-assistant\.io/redirect/blueprint_import[^"\']+)', cooked or "", re.I)
-    if m:
-        import_url = m.group(1)
 
+    # import button URL inside cooked HTML
+    m = re.search(
+        r'(https?://my\.home-assistant\.io/redirect/blueprint_import[^"\'\s<>]+)',
+        cooked or "",
+        re.I,
+    )
+    import_url = m.group(1) if m else None
+
+    # best-effort: parse "X users" that sometimes appears near the badge
     install_count = None
     if cooked and m:
         after = cooked.split(m.group(1), 1)[-1]
@@ -206,7 +235,7 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
                 mul, txt = 1_000_000, txt[:-1]
             try:
                 install_count = int(float(txt) * mul)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
 
     out = {"cooked": cooked, "import_url": import_url, "install_count": install_count}
@@ -215,8 +244,11 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
 
 
 async def api_filters(hass: HomeAssistant, request: web.Request):
-    tags = ["lighting", "climate", "presence", "security", "media", "energy", "camera",
-            "notifications", "tts", "switches", "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"]
+    tags = [
+        "lighting", "climate", "presence", "security", "media",
+        "energy", "camera", "notifications", "tts", "switches",
+        "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"
+    ]
     return web.json_response({"tags": tags})
 
 
