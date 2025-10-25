@@ -1,375 +1,333 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import json
 import logging
-from functools import lru_cache
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional
 
-from aiohttp import web, ClientError
-from homeassistant.config_entries import ConfigEntry
+from aiohttp import web, ClientResponseError
+from aiohttp.hdrs import METH_GET
+import async_timeout
+
 from homeassistant.core import HomeAssistant
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.components.frontend import (
+    async_register_built_in_panel,
+    async_remove_panel,
+)
+from homeassistant.components.http import HomeAssistantView
 
 from .const import (
     DOMAIN,
     PANEL_URL_PATH,
-    PANEL_ENDPOINT,
+    PANEL_TITLE,
+    PANEL_ICON,
+    STATIC_URL_PREFIX,
     API_BASE,
     DISCOURSE_BASE,
-    DISCOURSE_CATEGORY_ID,
+    DISCOURSE_BLUEPRINTS_CAT,
     CURATED_BUCKETS,
+    BUCKET_KEYWORDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-# ---------- helpers ----------
-
-def _panel_dir() -> Path:
-    return Path(__file__).parent / "panel"
-
-def _read_text(fp: Path) -> str:
-    return fp.read_text(encoding="utf-8")
-
-def _int(v: Any, default: int = 0) -> int:
-    try:
-        return int(v)
-    except Exception:
-        return default
-
-def _slugify(s: str) -> str:
-    return (
-        s.lower()
-        .strip()
-        .replace(" ", "-")
-        .replace("/", "-")
-        .replace("_", "-")
-    )
-
-# Simple in-memory cache with TTL
-class TTLCache:
-    def __init__(self, seconds: int = 60):
-        self._ttl = seconds
-        self._data: dict[str, tuple[float, Any]] = {}
-
-    def get(self, key: str):
-        import time
-        now = time.monotonic()
-        v = self._data.get(key)
-        if not v:
-            return None
-        ts, data = v
-        if now - ts > self._ttl:
-            self._data.pop(key, None)
-            return None
-        return data
-
-    def set(self, key: str, value: Any):
-        import time
-        self._data[key] = (time.monotonic(), value)
-
-CACHE = TTLCache(60)  # 60s cache for list/filters; topic cooked cached longer below
-
-# ---------- HTTP views (panel files) ----------
-
-class BlueprintStorePanelView(HomeAssistantView):
-    url = PANEL_ENDPOINT
-    name = f"{DOMAIN}:panel"
-    requires_auth = True
-
-    async def get(self, request):
-        index_html = _read_text(_panel_dir() / "index.html")
-        # ensure script src absolute to our panel path
-        # (index already points to /blueprint_store/app.js but make sure)
-        return web.Response(text=index_html, content_type="text/html")
+# --------------- Utilities -----------------
 
 
-class BlueprintStorePanelAsset(HomeAssistantView):
-    url = f"{PANEL_ENDPOINT}/app.js"
-    name = f"{DOMAIN}:panel_js"
-    requires_auth = True
+def _slugify_bucket(title: str, tags: List[str]) -> str:
+    """Best-effort bucket guess based on keywords + tags."""
+    src = " ".join([title.lower(), *[t.lower() for t in tags or []]])
+    for bucket, keys in BUCKET_KEYWORDS.items():
+        if any(k in src for k in keys):
+            return bucket
+    return "other"
 
-    async def get(self, request):
-        app_js = _read_text(_panel_dir() / "app.js")
-        return web.Response(text=app_js, content_type="application/javascript")
 
-
-# ---------- Data fetchers ----------
-
-async def _fetch_json(hass: HomeAssistant, url: str) -> dict:
+async def _get_json(hass: HomeAssistant, url: str, tries: int = 3, timeout: float = 15.0) -> Any:
+    """GET JSON with retry/backoff (friendly to 429)."""
     session = async_get_clientsession(hass)
-    tries = 3
     delay = 0.6
-    for i in range(tries):
+    for attempt in range(tries):
         try:
-            async with session.get(url, timeout=20) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-        except Exception as e:
-            if i == tries - 1:
+            with async_timeout.timeout(timeout):
+                async with session.get(url, headers={"Accept": "application/json"}) as resp:
+                    if resp.status == 429 and attempt < tries - 1:
+                        await asyncio.sleep(delay)
+                        delay *= 2
+                        continue
+                    resp.raise_for_status()
+                    return await resp.json()
+        except (asyncio.TimeoutError, ClientResponseError) as exc:
+            if attempt == tries - 1:
                 raise
             await asyncio.sleep(delay)
             delay *= 2
 
-def _topic_to_item(topic: dict) -> dict:
-    # topic keys from Discourse list JSON
+
+def _topic_to_item(topic: Dict[str, Any], users_index: Dict[int, str]) -> Dict[str, Any]:
+    """Convert Discourse topic -> item JSON consumed by the UI."""
     tid = topic.get("id")
-    slug = topic.get("slug") or _slugify(topic.get("title") or "")
-    title = topic.get("title") or ""
-    author = ""  # filled from detailed call only; keep blank for list
+    slug = topic.get("slug") or ""
+    title = topic.get("title") or f"Topic {tid}"
+    author = ""
+    # Author from first poster if available
+    posters = topic.get("posters") or []
+    if posters:
+        uid = posters[0].get("user_id")
+        author = users_index.get(uid, "")
     tags = topic.get("tags") or []
-    like_count = _int(topic.get("like_count"), 0)
-    posts_count = _int(topic.get("posts_count"), 0)  # includes the OP
-    excerpt = topic.get("excerpt") or ""
-    # Build UI payload
+    excerpt = (topic.get("excerpt") or "").strip()
+    likes = int(topic.get("like_count") or 0)
+    replies = int(topic.get("reply_count") or max((topic.get("posts_count") or 1) - 1, 0))
+    bucket = _slugify_bucket(title, tags)
+
     return {
         "id": tid,
         "slug": slug,
         "title": title,
         "author": author,
         "tags": tags,
-        "bucket": (tags[0] if tags else "other"),
-        "likes": like_count,
-        "comments": max(0, posts_count - 1),
         "excerpt": excerpt,
-        # UI will show a pill at bottom-right; we’ll generate import_url from topic cooked
-        "import_url": "",
+        "likes": likes,
+        "replies": replies,
+        "bucket": bucket,
+        # Filled lazily by the UI's /topic call
+        "import_url": None,
+        "topic_url": f"{DISCOURSE_BASE}/t/{slug}/{tid}" if slug else f"{DISCOURSE_BASE}/t/{tid}",
         "uses": None,
     }
 
-async def _list_page(
-    hass: HomeAssistant,
-    page: int,
-    q_title: str | None,
-    bucket: str | None,
-    sort: str | None,
-) -> dict:
-    """Return one page of topics from Blueprints Exchange."""
-    # Discourse supports /c/<slug>/<id>.json?page=n
-    # We use “latest” ordering and sort client-side for likes when requested.
-    list_url = f"{DISCOURSE_BASE}/c/blueprints-exchange/{DISCOURSE_CATEGORY_ID}.json?page={page}"
-    data = await _fetch_json(hass, list_url)
-    topics = data.get("topic_list", {}).get("topics", [])
 
-    items = []
-    for t in topics:
-        # Only include in category and visible topics
-        if t.get("category_id") != DISCOURSE_CATEGORY_ID:
-            continue
-        item = _topic_to_item(t)
-        title = (item["title"] or "").lower()
-        if q_title and q_title.lower() not in title:
-            continue
-        if bucket:
-            # allow curated bucket or raw tag match
-            if bucket in CURATED_BUCKETS:
-                # crude mapping: match the name or first tag overlap
-                ok = (item["bucket"] == bucket) or (bucket in item["tags"])
-                if not ok:
-                    continue
-            else:
-                if bucket not in item["tags"]:
-                    continue
-        items.append(item)
-
-    # sorting
-    if sort == "likes":
-        items.sort(key=lambda x: _int(x.get("likes"), 0), reverse=True)
-    elif sort == "title":
-        items.sort(key=lambda x: (x.get("title") or "").lower())
-
-    # Discourse “has_more” is implicit; assume more if we got many items
-    return {
-        "items": items,
-        "has_more": len(items) >= 25  # heuristic
-    }
-
-async def _collect_tags(hass: HomeAssistant) -> list[str]:
-    """Fetch a few pages and aggregate tags for dropdown."""
-    cached = CACHE.get("tags")
-    if cached:
-        return cached
-
-    tags: set[str] = set()
-    for p in range(0, 3):
-        try:
-            data = await _fetch_json(
-                hass,
-                f"{DISCOURSE_BASE}/c/blueprints-exchange/{DISCOURSE_CATEGORY_ID}.json?page={p}",
-            )
-            for t in data.get("topic_list", {}).get("topics", []):
-                for tg in (t.get("tags") or []):
-                    tags.add(tg)
-        except ClientError:
-            break
-
-    ordered = sorted(tags)
-    CACHE.set("tags", ordered)
-    return ordered
-
-async def _topic_cooked(hass: HomeAssistant, tid: int) -> dict:
-    """Return cooked HTML for OP; also scan for import button & uses when possible."""
-    cache_key = f"topic:{tid}"
-    cached = CACHE.get(cache_key)
-    if cached:
-        return cached
-
-    url = f"{DISCOURSE_BASE}/t/{tid}.json"
-    data = await _fetch_json(hass, url)
-    posts = data.get("post_stream", {}).get("posts", [])
-    cooked = posts[0].get("cooked", "") if posts else ""
-    slug = data.get("slug") or ""
-    like_count = _int(data.get("like_count"), 0)
-
-    # Try to find an “Import Blueprint” link
-    import_url = ""
-    uses = None
-    try:
-        from bs4 import BeautifulSoup  # optional at runtime; if not, we just skip
-        soup = BeautifulSoup(cooked, "html.parser")
-        a = soup.select_one('a[href*="my.home-assistant.io/redirect/blueprint_import"]')
-        if a:
-            import_url = a.get("href") or ""
-        # Read a number badge right next to it if present (site-specific)
-        badge = a.find_next("span") if a else None
-        if badge and badge.get_text(strip=True).lower().endswith("k"):
-            text = badge.get_text(strip=True).lower().replace("k", "")
-            uses = int(float(text) * 1000)
-    except Exception:
-        pass
-
-    payload = {
-        "cooked": cooked,
-        "slug": slug,
-        "likes": like_count,
-        "import_url": import_url,
-        "uses": uses,
-    }
-    CACHE.set(cache_key, payload)
-    return payload
-
-# ---------- API Views ----------
-
-class BPFiltersView(HomeAssistantView):
-    url = f"{API_BASE}/filters"
-    name = f"{DOMAIN}:filters"
-    requires_auth = True
-
-    async def get(self, request):
-        hass: HomeAssistant = request.app["hass"]
-        try:
-            tags = await _collect_tags(hass)
-            return self.json({"tags": tags, "buckets": CURATED_BUCKETS})
-        except Exception as e:
-            _LOGGER.exception("filters failed: %s", e)
-            return self.json({"tags": [], "buckets": CURATED_BUCKETS})
+async def _first_import_link_from_cooked(cooked_html: str) -> Optional[str]:
+    """Find the first MyHA import link inside cooked HTML."""
+    if not cooked_html:
+        return None
+    # Accept both my.home-assistant.io and home-assistant.io/my
+    m = re.search(
+        r'https?://(?:my\.home-assistant\.io|www\.home-assistant\.io)/redirect/blueprint_import[^"\']+',
+        cooked_html,
+        flags=re.I,
+    )
+    return m.group(0) if m else None
 
 
-class BPListView(HomeAssistantView):
+# --------------- HTTP Views -----------------
+
+
+class BlueprintListView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
-    name = f"{DOMAIN}:blueprints"
+    name = "api:blueprint_store:blueprints"
     requires_auth = True
 
-    async def get(self, request):
+    async def get(self, request: web.Request) -> web.StreamResponse:
         hass: HomeAssistant = request.app["hass"]
-        q = request.query
-        page = _int(q.get("page", "0"), 0)
-        q_title = q.get("q_title") or None
-        bucket = q.get("bucket") or None
-        sort = q.get("sort") or "new"
 
-        cache_key = f"list:{page}:{q_title}:{bucket}:{sort}"
-        cached = CACHE.get(cache_key)
-        if cached:
-            return self.json(cached)
+        page = int(request.query.get("page", "0"))
+        q_title = (request.query.get("q_title") or "").strip()
+        sort = (request.query.get("sort") or "new").strip()
+        bucket = (request.query.get("bucket") or "").strip().lower()
+
+        items: List[Dict[str, Any]] = []
+        has_more = False
 
         try:
-            data = await _list_page(hass, page, q_title, bucket, sort)
-            CACHE.set(cache_key, data)
-            return self.json(data)
-        except Exception as e:
-            _LOGGER.exception("list failed: %s", e)
-            return self.json({"items": [], "has_more": False, "error": str(e)})
+            if q_title:
+                # Title search (return batch only; UI will requery for the full set)
+                q = q_title.replace("/", " ")
+                # Discourse search in category 53, in:title
+                url = f"{DISCOURSE_BASE}/search.json?q=category%3A{DISCOURSE_BLUEPRINTS_CAT}%20in%3Atitle%20{q}"
+                data = await _get_json(hass, url)
+                topics = (data or {}).get("topics") or []
+                # Construct a minimal users index
+                users = (data or {}).get("users") or []
+                users_idx = {u.get("id"): (u.get("username") or "") for u in users}
+                for t in topics:
+                    item = _topic_to_item(t, users_idx)
+                    if bucket and item["bucket"] != bucket:
+                        continue
+                    items.append(item)
+                has_more = False
+            else:
+                # Category listing – supports paging
+                url = f"{DISCOURSE_BASE}/c/blueprints-exchange/{DISCOURSE_BLUEPRINTS_CAT}/l/latest.json?page={page}"
+                data = await _get_json(hass, url)
+                tlist = (data or {}).get("topic_list") or {}
+                topics = tlist.get("topics") or []
+                users = (data or {}).get("users") or []
+                users_idx = {u.get("id"): (u.get("username") or "") for u in users}
+                for t in topics:
+                    item = _topic_to_item(t, users_idx)
+                    if bucket and item["bucket"] != bucket:
+                        continue
+                    items.append(item)
+                has_more = bool(tlist.get("more_topics_url"))
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("Failed to fetch blueprint topics: %s", exc)
+            return web.json_response(
+                {"items": [], "has_more": False, "error": f"{exc.__class__.__name__}: {exc}"}, status=500
+            )
+
+        # Local sort choices
+        if sort == "title":
+            items.sort(key=lambda x: (x.get("title") or "").lower())
+        elif sort == "likes":
+            items.sort(key=lambda x: int(x.get("likes") or 0), reverse=True)
+        # "new" keeps server order
+
+        return web.json_response({"items": items, "has_more": has_more})
 
 
-class BPTopicView(HomeAssistantView):
+class FiltersView(HomeAssistantView):
+    url = f"{API_BASE}/filters"
+    name = "api:blueprint_store:filters"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.StreamResponse:
+        # Expose curated buckets as the "tag" filter list the UI expects
+        return web.json_response({"tags": CURATED_BUCKETS})
+
+
+class TopicView(HomeAssistantView):
     url = f"{API_BASE}/topic"
-    name = f"{DOMAIN}:topic"
+    name = "api:blueprint_store:topic"
     requires_auth = True
 
-    async def get(self, request):
+    async def get(self, request: web.Request) -> web.StreamResponse:
         hass: HomeAssistant = request.app["hass"]
-        tid = _int(request.query.get("id"), 0)
-        if not tid:
-            return self.json({"error": "missing id"}, status_code=400)
+        tid = (request.query.get("id") or "").strip()
+        if not tid.isdigit():
+            return web.json_response({"error": "missing id"}, status=400)
         try:
-            data = await _topic_cooked(hass, tid)
-            return self.json(data)
-        except Exception as e:
-            _LOGGER.exception("topic failed: %s", e)
-            return self.json({"cooked": "<em>Failed to load.</em>" })
+            data = await _get_json(hass, f"{DISCOURSE_BASE}/t/{tid}.json")
+            posts = (data or {}).get("post_stream", {}).get("posts") or []
+            cooked = posts[0].get("cooked") if posts else ""
+            # Try to surface an import link for the list, if UI wants it
+            import_url = await _first_import_link_from_cooked(cooked or "")
+            return web.json_response({"cooked": cooked or "", "import_url": import_url})
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.exception("Failed to fetch topic %s: %s", tid, exc)
+            return web.json_response({"error": str(exc)}, status=500)
 
 
-class BPGoView(HomeAssistantView):
+class RedirectView(HomeAssistantView):
     url = f"{API_BASE}/go"
-    name = f"{DOMAIN}:go"
+    name = "api:blueprint_store:go"
     requires_auth = True
 
-    async def get(self, request):
-        q = request.query
-        tid = _int(q.get("tid"), 0)
-        slug = q.get("slug") or ""
-        if not tid:
-            return web.HTTPBadRequest(text="missing tid")
-        # Safe absolute URL builder
-        href = f"{DISCOURSE_BASE}/t/{slug}/{tid}" if slug else f"{DISCOURSE_BASE}/t/{tid}"
-        raise web.HTTPFound(href)
+    async def get(self, request: web.Request) -> web.StreamResponse:
+        tid = (request.query.get("tid") or "").strip()
+        slug = (request.query.get("slug") or "").strip()
+        if not tid.isdigit():
+            return web.Response(status=400, text="Bad tid")
+        target = f"{DISCOURSE_BASE}/t/{slug}/{tid}" if slug else f"{DISCOURSE_BASE}/t/{tid}"
+        raise web.HTTPFound(target)
 
-# ---------- setup ----------
 
-async def async_setup(hass: HomeAssistant, config) -> bool:
-    return True
+class PanelHtmlView(HomeAssistantView):
+    """Serve the panel HTML (index.html) from /panel."""
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Register panel views
-    hass.http.register_view(BlueprintStorePanelView)
-    hass.http.register_view(BlueprintStorePanelAsset)
+    url = f"{API_BASE}/ui"
+    name = "api:blueprint_store:ui"
+    requires_auth = True
 
-    # Register API views
-    hass.http.register_view(BPFiltersView)
-    hass.http.register_view(BPListView)
-    hass.http.register_view(BPTopicView)
-    hass.http.register_view(BPGoView)
+    def __init__(self, panel_dir: Path) -> None:
+        self._panel_dir = panel_dir
 
-    # Register sidebar panel using panel_custom in an iframe
-    # IMPORTANT: no awaits; argument names must match current HA
+    async def get(self, request: web.Request) -> web.StreamResponse:
+        index = self._panel_dir / "index.html"
+        if not index.exists():
+            return web.Response(status=500, text="Panel index.html missing")
+        return web.Response(text=index.read_text("utf-8"), content_type="text/html")
+
+
+# --------------- Setup / Teardown -----------------
+
+
+def _mount_static(app, prefix: str, folder: Path) -> None:
+    """(Idempotent) Mount a static folder under prefix."""
+    # Remove any existing static resource with that prefix
+    for route in list(app.router.routes()):
+        res = getattr(route, "resource", None)
+        if res and getattr(res, "prefix", "") == prefix:
+            app.router.remove_resource(res)
+    app.router.add_static(prefix, str(folder), show_index=False)
+
+
+async def _register_panel_and_static(hass: HomeAssistant) -> None:
+    """Mount static assets and register the sidebar panel."""
+    base = Path(__file__).parent
+    panel_dir = base / "panel"
+    images_dir = base / "images"
+
+    if not panel_dir.exists():
+        _LOGGER.warning("Panel dir does not exist: %s", panel_dir)
+    if not images_dir.exists():
+        _LOGGER.info("Images dir not found: %s (ok if not using images)", images_dir)
+
+    app = hass.http.app
+    _mount_static(app, STATIC_URL_PREFIX, panel_dir)
+    _mount_static(app, f"{STATIC_URL_PREFIX}/images", images_dir)
+
+    # Register panel HTML view
+    hass.http.register_view(PanelHtmlView(panel_dir))
+
+    # Sidebar panel (iframe -> our /ui route)
     try:
-        hass.components.frontend.async_register_built_in_panel(
+        async_register_built_in_panel(
             hass,
-            component_name="panel_custom",
-            sidebar_title="Blueprint Store",
-            sidebar_icon="mdi:storefront",
-            frontend_url_path=PANEL_URL_PATH,
+            component_name="iframe",
+            sidebar_title=PANEL_TITLE,
+            sidebar_icon=PANEL_ICON,
+            url_path=PANEL_URL_PATH,
+            config={"url": f"{API_BASE}/ui"},
             require_admin=False,
-            config={
-                "module_url": PANEL_ENDPOINT,  # our HTML view, embedded in iframe
-                "embed_iframe": True,
-                "trust_external": False,
-            },
             update=True,
         )
-    except Exception as e:
-        _LOGGER.error("Failed to register panel: %s", e)
+    except Exception as exc:  # noqa: BLE001
+        _LOGGER.exception("Failed to register sidebar panel: %s", exc)
+        # Try remove->add once more
+        try:
+            await async_remove_panel(hass, PANEL_URL_PATH)
+            async_register_built_in_panel(
+                hass,
+                component_name="iframe",
+                sidebar_title=PANEL_TITLE,
+                sidebar_icon=PANEL_ICON,
+                url_path=PANEL_URL_PATH,
+                config={"url": f"{API_BASE}/ui"},
+                require_admin=False,
+                update=True,
+            )
+        except Exception:
+            _LOGGER.exception("Panel registration retry failed")
+            # Non-fatal – API views will still work
+
+
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    # Nothing to do here; we set up on entry
+    return True
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    await _register_panel_and_static(hass)
+
+    # Register our API views
+    hass.http.register_view(BlueprintListView())
+    hass.http.register_view(FiltersView())
+    hass.http.register_view(TopicView())
+    hass.http.register_view(RedirectView())
 
     return True
 
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Remove panel (ignore errors on older cores)
     try:
-        hass.components.frontend.async_remove_panel(PANEL_URL_PATH)
-    except Exception:
+        await async_remove_panel(hass, PANEL_URL_PATH)
+    except Exception:  # noqa: BLE001
         pass
+    # No dynamic routes to remove for the API/views – HA will drop them on reload
     return True
