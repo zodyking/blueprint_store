@@ -25,11 +25,10 @@ class BlueprintStoreConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class BlueprintStoreOptionsFlow(OptionsFlow):
-    """No-op options (kept for future expansion)."""
+    """No-op options (placeholder for future)."""
 
     def __init__(self, entry: ConfigEntry) -> None:
         self._entry = entry
 
     async def async_step_init(self, user_input=None):
-        # Nothing to configure yet
         return self.async_create_entry(title="", data={})
