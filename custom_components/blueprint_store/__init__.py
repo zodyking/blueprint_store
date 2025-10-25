@@ -124,10 +124,14 @@ def _topic_to_item(t: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _bucket_for_tags(tags: List[str]) -> Optional[str]:
+    # Refined set you asked for (logical buckets + AI, no "automation").
     CURATED = [
         "lighting", "climate", "presence", "security", "media",
-        "energy", "camera", "notifications", "tts", "switches",
-        "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"
+        "energy", "camera", "alarm", "notifications", "tts",
+        "sensors", "switches", "covers", "doors", "windows", "entry",
+        "voice", "ai", "zigbee", "zwave", "mqtt", "esphome",
+        "network", "weather", "location", "appliance", "irrigation",
+        "vacuum", "other",
     ]
     tagset = set((tags or []))
     for k in CURATED:
@@ -139,7 +143,7 @@ def _bucket_for_tags(tags: List[str]) -> Optional[str]:
 # ---------------- API views ----------------
 async def api_blueprints(hass: HomeAssistant, request: web.Request):
     """
-    Original working category endpoint; optional filters applied locally.
+    Known-good category endpoint; optional filters applied locally.
     """
     session: aiohttp.ClientSession = hass.data[DOMAIN]["session"]
     cache: TTLCache = hass.data[DOMAIN]["cache"]
@@ -154,7 +158,6 @@ async def api_blueprints(hass: HomeAssistant, request: web.Request):
     if cached:
         return web.json_response(cached)
 
-    # Original, known-good endpoint
     url = f"{BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}&no_subcategories=true"
     data = await _json(session, url)
     topics = (data.get("topic_list") or {}).get("topics") or []
@@ -233,12 +236,15 @@ async def api_topic(hass: HomeAssistant, request: web.Request):
 
 async def api_filters(hass: HomeAssistant, request: web.Request):
     """
-    Return a fixed, non-empty curated tag set (matches the earlier working UI).
+    Return the refined curated tag set (stable, non-empty).
     """
     tags = [
         "lighting", "climate", "presence", "security", "media",
-        "energy", "camera", "notifications", "tts", "switches",
-        "covers", "zigbee", "zwave", "mqtt", "ai_assistants", "other"
+        "energy", "camera", "alarm", "notifications", "tts",
+        "sensors", "switches", "covers", "doors", "windows", "entry",
+        "voice", "ai", "zigbee", "zwave", "mqtt", "esphome",
+        "network", "weather", "location", "appliance", "irrigation",
+        "vacuum", "other",
     ]
     return web.json_response({"tags": tags})
 
