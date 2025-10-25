@@ -4,6 +4,8 @@
     <meta charset="utf-8" />
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Make every relative URL resolve under /api/blueprint_store/panel/ -->
+    <base href="/api/blueprint_store/panel/">
 
     <!-- Shoelace -->
     <script
@@ -154,13 +156,7 @@
       <div id="sentinel"></div>
     </main>
 
-    <!-- (dialog kept for future stats) -->
-    <sl-dialog id="statsDialog" label="Blueprint popularity">
-      <div id="statsBody">Loading…</div>
-      <sl-button slot="footer" variant="primary" onclick="this.closest('sl-dialog').hide()">Close</sl-button>
-    </sl-dialog>
-
-    <!-- cache-busted so the browser grabs your current app.js -->
-    <script src="./app.js?v=restore-working-1" defer></script>
+    <!-- NOTE: base href makes this resolve to /api/blueprint_store/panel/app.js -->
+    <script src="app.js?v=bs-open-3" defer></script>
   </body>
 </html>
