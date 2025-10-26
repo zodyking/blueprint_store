@@ -10,6 +10,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
     async def async_step_user(self, user_input=None):
+        # Single instance
         if self._async_current_entries():
             return self.async_abort(reason="already_configured")
         if user_input is not None:
