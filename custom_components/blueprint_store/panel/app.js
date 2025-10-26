@@ -1,282 +1,242 @@
-/* Blueprint Store – front-end (only the requested changes) */
 const API = "/api/blueprint_store";
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const $ = (s) => document.querySelector(s);
 
-/* ---------- small utils ---------- */
-const fmt = n => (n == null || isNaN(n) ? "-" : Intl.NumberFormat("en", { notation: "compact" }).format(n));
-const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+/* ---------- helpers ---------- */
+function esc(s){
+  return (s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
-async function fetchJSON(url) {
-  const res = await fetch(url, { credentials: "same-origin" });
+async function fetchJSONRaw(url){
+  const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  return res.json();
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+async function fetchJSON(url, tries=3){
+  let delay = 600;
+  for(let i=0;i<tries;i++){
+    try{ return await fetchJSONRaw(url); }
+    catch(e){
+      if (i < tries-1 && /429/.test(String(e))) { await sleep(delay+Math.random()*250); delay*=2; continue; }
+      throw e;
+    }
+  }
 }
 
-/* we’ll lazy-get views from topic meta; cache it */
-const topicMetaCache = new Map(); // id -> { views, likes, replies }
-async function getTopicMeta(id) {
-  if (topicMetaCache.has(id)) return topicMetaCache.get(id);
-  const data = await fetchJSON(`${API}/topic?id=${encodeURIComponent(id)}`);
-  // Discourse fields we expect to exist; defensively default
-  const meta = {
-    views: data?.views ?? data?.topic?.views ?? 0,
-    likes: data?.like_count ?? data?.topic?.like_count ?? 0,
-    replies: (data?.posts_count ?? data?.topic?.posts_count ?? 1) - 1
-  };
-  topicMetaCache.set(id, meta);
-  return meta;
-}
+/* small utils */
+function fmtK(n){ if (n==null) return "0"; if (n>=1000) return (Math.round(n/100)/10)+"k"; return String(n); }
 
-/* ---------- render helpers ---------- */
-function pillHtml(likesText, viewsText) {
-  return `
-  <div class="stat-pill" role="group" aria-label="Post stats">
-    <span class="stat likes" title="Likes" data-noaction>
-      <sl-icon name="heart"></sl-icon><b class="num">${likesText}</b>
-    </span>
-    <span class="sep"></span>
-    <span class="stat views" title="Views" data-noaction>
-      <sl-icon name="eye"></sl-icon><b class="num">${viewsText}</b>
-    </span>
-  </div>`;
-}
-
-function tagPills(tags) {
-  if (!Array.isArray(tags) || !tags.length) return "";
-  const unique = [];
-  tags.forEach(t => {
-    const v = (t || "").toString().trim();
-    if (v && !unique.includes(v)) unique.push(v);
+/* render tag pills */
+function tagPills(tags){
+  const arr = [];
+  (tags||[]).forEach(t=>{
+    const v=(t||"").toString().trim();
+    if (v && !arr.includes(v)) arr.push(v);
   });
-  return `<div class="tags">${unique.slice(0, 4).map(t => `<span class="tag">${t}</span>`).join("")}</div>`;
+  if (!arr.length) return "";
+  return `<div class="tags">${arr.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-function renderCard(item) {
+/* normalize & insert cooked HTML */
+function setPostHTML(container, html){
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html || "<em>Nothing to show.</em>";
+  container.innerHTML = "";
+  container.appendChild(tmp);
+}
+
+/* cache */
+const detailCache = new Map();
+
+/* card */
+function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
 
-  const likesText = fmt(item.likes ?? item.like_count);
-  const viewsPlaceholder = "–";
-
   el.innerHTML = `
     <div class="row">
-      <h3 class="title">${item.title ?? ""}</h3>
-      ${item.author ? `<span class="author">by ${item.author}</span>` : ""}
+      <h3>${esc(it.title)}</h3>
+      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
     </div>
-    ${tagPills([item.bucket, ...(item.tags || [])])}
-    <p class="desc">${item.excerpt ?? ""}</p>
+    ${tagPills(it.tags)}
 
-    <button class="toggle" type="button" data-id="${item.id}">Read more</button>
-    <div class="more" id="more-${item.id}"></div>
+    <div class="desc-box">
+      <p class="desc" id="desc-${it.id}">${esc(it.excerpt || "")}</p>
+      <div class="more" id="more-${it.id}"></div>
+      <div class="toggle" data-id="${it.id}">Read more</div>
+    </div>
 
-    ${pillHtml(likesText, viewsPlaceholder)}
-
-    <div class="footer">
-      <a class="cta-import" href="${item.import_url}" target="_blank" rel="noopener">
-        <sl-icon name="download"></sl-icon> Import to Home Assistant
+    <div class="card__footer">
+      <a class="myha-btn" data-open="${esc(it.import_url)}">
+        <sl-icon name="download"></sl-icon>
+        Import to Home Assistant
       </a>
+    </div>
+
+    <div class="stat-pill">
+      <sl-icon name="heart"></sl-icon>
+      <span class="count">${fmtK(it.likes)}</span>
+      <span class="label">Liked this</span>
     </div>
   `;
 
-  // prevent stats pill clicks from navigating anywhere
-  el.addEventListener("click", (e) => {
-    const node = e.target.closest("[data-noaction]");
-    if (node) {
-      e.preventDefault();
-      e.stopPropagation();
-    }
-  });
-
-  // lazy fill views number
-  const viewsNum = $(".stat.views .num", el);
-  getTopicMeta(item.id).then(m => { viewsNum.textContent = fmt(m.views); }).catch(() => { /* leave placeholder */ });
-
-  // read more / less loads cooked once
-  const toggle = $(".toggle", el);
-  const more = $(`#more-${item.id}`, el);
+  // Expand/Collapse in-place
+  const toggle = el.querySelector(".toggle");
+  const more = el.querySelector(`#more-${it.id}`);
   let expanded = false;
 
-  async function expandOnce() {
+  async function expandNow(){
     if (expanded) return;
     expanded = true;
-    toggle.disabled = true;
-    try {
-      const data = await fetchJSON(`${API}/topic?id=${encodeURIComponent(item.id)}`);
-      const cooked = data?.cooked ?? "<em>No content</em>";
-      const box = document.createElement("div");
-      box.innerHTML = cooked;
-      // rewrite any external anchors to open new tab safely
-      $$("a", box).forEach(a => { a.target = "_blank"; a.rel = "noopener"; });
-      more.innerHTML = "";
-      more.appendChild(box);
-    } catch (e) {
-      more.innerHTML = `<em>Failed to load post</em>`;
-    } finally {
-      toggle.disabled = false;
+    toggle.style.pointerEvents = "none";
+    try{
+      if (!detailCache.has(it.id)) {
+        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+        detailCache.set(it.id, data.cooked || "");
+      }
+      setPostHTML(more, detailCache.get(it.id));
+      more.style.display = "block";
+      toggle.textContent = "Less";
+    }catch(e){
+      setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
+      more.style.display = "block";
+      toggle.textContent = "Less";
+    }finally{
+      toggle.style.pointerEvents = "";
     }
   }
 
   toggle.addEventListener("click", async () => {
-    if (more.style.display === "block") {
-      more.style.display = "none";
-      toggle.textContent = "Read more";
-    } else {
-      await expandOnce();
-      more.style.display = "block";
-      toggle.textContent = "Less";
-    }
+    if (!expanded) { await expandNow(); }
+    else { expanded = false; more.style.display = "none"; toggle.textContent = "Read more"; }
+  });
+
+  // Import button
+  el.addEventListener("click", (ev)=>{
+    const a = ev.target.closest("[data-open]");
+    if (!a) return;
+    ev.preventDefault();
+    try{ window.open(a.getAttribute("data-open"), "_blank"); }catch{}
   });
 
   return el;
 }
 
-function appendCards(target, items) {
-  const frag = document.createDocumentFragment();
-  items.forEach(it => frag.appendChild(renderCard(it)));
-  target.appendChild(frag);
+function appendItems(target, items){
+  for (const it of items) target.appendChild(renderCard(it));
 }
 
-/* ---------- app boot ---------- */
-function boot() {
-  const list = $("#list");
-  const empty = $("#empty");
+/* boot */
+function boot(){
+  const list   = $("#list");
+  const empty  = $("#empty");
   const errorB = $("#error");
-
   const search = $("#search");
   const sortSel = $("#sort");
-  const tagBtn = $("#tagbtn");
-  const tagMenu = $("#tagmenu");
-  const tagDD = $("#tagdd");
   const refreshBtn = $("#refresh");
-  const heading = $("#sectionTitle");
+  const sentinel = $("#sentinel");
+  const sectionTitle = $("#sectionTitle");
+
+  const tagdd = $("#tagdd");
+  const tagbtn = $("#tagbtn");
+  const tagmenu = $("#tagmenu");
 
   if (!list) return;
 
-  const SORT = {
-    NEW: "new",
-    LIKES: "likes",
-    TITLE: "title"
-  };
-  const LABEL_BY_SORT = {
-    [SORT.NEW]: "Newest",
-    [SORT.LIKES]: "Most liked",
-    [SORT.TITLE]: "A–Z"
-  };
-
   let page = 0;
+  let qTitle = "";
   let loading = false;
   let hasMore = true;
+  let sort = "new";
+  let tag = "";
 
-  let qTitle = "";
-  let sort = SORT.NEW;
-  let bucket = "";
+  const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
+  const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
 
-  const sentinel = $("#sentinel");
-  const setError = (msg) => { if (errorB) { errorB.textContent = msg; errorB.style.display = "block"; } };
-  const clearError = () => { if (errorB) { errorB.textContent = ""; errorB.style.display = "none"; } };
-
-  function updateHeading() {
-    let base = LABEL_BY_SORT[sort] || "All";
-    let suffix = "blueprints";
-    if (qTitle && bucket) {
-      heading.textContent = `Results for “${qTitle}” in ${bucket} — ${base.toLowerCase()}`;
-    } else if (qTitle) {
-      heading.textContent = `Results for “${qTitle}” — ${base.toLowerCase()}`;
-    } else if (bucket) {
-      heading.textContent = `${bucket} — ${base.toLowerCase()}`;
-    } else {
-      heading.textContent = `${base} ${suffix}`;
-    }
+  function updateTitle(){
+    const base = sort==="likes" ? "Most liked blueprints" :
+                 sort==="title" ? "A–Z blueprints" : "Newest blueprints";
+    sectionTitle.textContent = tag ? `${base} — “${tag}”` : base;
   }
 
-  async function fetchPage(p) {
+  async function fetchFilters(){
+    try{
+      const data = await fetchJSON(`${API}/filters`);
+      const tags = Array.isArray(data.tags) ? data.tags : [];
+      tagmenu.innerHTML = "";
+      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
+      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
+      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
+      tagmenu.addEventListener("sl-select", async (ev)=>{
+        tag = ev.detail.item.value || "";
+        tagbtn.textContent = tag || "All tags";
+        updateTitle();
+        await loadAllForSearch();
+        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
+      });
+    }catch(e){ /* optional */ }
+  }
+
+  async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
     if (qTitle) url.searchParams.set("q_title", qTitle);
     if (sort) url.searchParams.set("sort", sort);
-    if (bucket) url.searchParams.set("bucket", bucket);
-    return fetchJSON(url.toString());
+    if (tag) url.searchParams.set("tag", tag); // IMPORTANT: use 'tag' param (loads ALL pages)
+    return await fetchJSON(url.toString());
   }
 
-  async function load(initial = false) {
+  async function load(initial=false){
     if (loading || (!hasMore && !initial)) return;
     loading = true; clearError();
-    try {
+    try{
       const data = await fetchPage(page);
-      const items = data?.items || [];
-      hasMore = !!data?.has_more;
-
-      if (initial) {
+      const items = data.items || [];
+      hasMore = !!data.has_more;
+      if (initial){
         list.innerHTML = "";
         if (empty) empty.style.display = items.length ? "none" : "block";
       }
-      appendCards(list, items);
+      appendItems(list, items);
       page += 1;
-    } catch (e) {
-      setError(`Failed to load: ${String(e.message || e)}`);
-    } finally {
+    }catch(e){
+      setError(`Failed to load: ${String(e.message||e)}`);
+    }finally{
       loading = false;
     }
   }
 
-  async function reloadAll() {
-    page = 0; hasMore = true; list.innerHTML = "";
-    clearError(); updateHeading();
-    await load(true);
+  async function loadAllForSearch(){
+    page = 0; hasMore = true; list.innerHTML = ""; clearError();
+    let first = true;
+    while (hasMore) { await load(first); first = false; await sleep(6); }
   }
 
-  /* ---- SORT (hardened) ---- */
-  // enforce values; never rely on display text
-  if (sortSel) {
-    sortSel.value = SORT.NEW;
-    sortSel.addEventListener("sl-change", () => {
-      const v = String(sortSel.value || "").toLowerCase();
-      sort = v === SORT.LIKES ? SORT.LIKES : v === SORT.TITLE ? SORT.TITLE : SORT.NEW;
-      reloadAll();
-    });
-  }
-
-  /* ---- TAGS ---- */
-  async function fetchFilters() {
-    try {
-      const data = await fetchJSON(`${API}/filters`);
-      const tags = Array.isArray(data.tags) ? data.tags : [];
-      tagMenu.innerHTML = `<sl-menu-item value="">All tags</sl-menu-item>`;
-      tags.forEach(t => tagMenu.insertAdjacentHTML("beforeend", `<sl-menu-item value="${t}">${t}</sl-menu-item>`));
-      tagMenu.addEventListener("sl-select", (ev) => {
-        bucket = ev.detail.item.value || "";
-        tagBtn.textContent = bucket || "All tags";
-        reloadAll();
-        tagDD?.hide?.();
-      });
-    } catch {
-      // optional
-    }
-  }
-
-  /* ---- SEARCH ---- */
-  if (search) {
-    const onSearch = debounce(() => {
-      qTitle = (search.value || "").trim();
-      reloadAll();
-    }, 280);
+  if (search){
+    const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); updateTitle(); await loadAllForSearch(); }, 280);
     search.addEventListener("sl-input", onSearch);
     search.addEventListener("sl-clear", onSearch);
   }
+  if (sortSel){
+    sortSel.addEventListener("sl-change", async () => {
+      const v = sortSel.value;
+      sort = (v==="likes"||v==="title"||v==="new") ? v : "new"; // harden
+      updateTitle();
+      await loadAllForSearch();
+    });
+  }
+  if (refreshBtn){ refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); }); }
 
-  /* ---- Refresh ---- */
-  refreshBtn?.addEventListener("click", reloadAll);
-
-  /* ---- Infinite scroll ---- */
-  if (sentinel) {
-    new IntersectionObserver((entries) => {
-      if (entries[0]?.isIntersecting) load(false);
-    }, { rootMargin: "700px" }).observe(sentinel);
+  if (sentinel){
+    const io = new IntersectionObserver((entries)=>{ if (entries[0] && entries[0].isIntersecting) load(false); },{ rootMargin:"700px" });
+    io.observe(sentinel);
   }
 
+  updateTitle();
   fetchFilters();
-  updateHeading();
   load(true);
 }
 
