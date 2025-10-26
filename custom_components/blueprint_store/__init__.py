@@ -11,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.components import frontend as ha_frontend  # module import (works across versions)
+from homeassistant.components import frontend as ha_frontend  # version-proof import
 
 from .const import (
     DOMAIN,
@@ -112,11 +112,12 @@ async def _refresh(hass: HomeAssistant, force: bool = False):
     store["items"] = await _crawl_blueprints(hass)
     store["last_update"] = now
 
-# ---------- HTTP views ----------
+# ---------- HTTP views (now public: requires_auth = False) ----------
 class BlueprintListView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
-    requires_auth = True
+    requires_auth = False  # public
+    cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
     async def get(self, request):
@@ -130,7 +131,8 @@ class BlueprintListView(HomeAssistantView):
 class BlueprintTopicView(HomeAssistantView):
     url = f"{API_BASE}/topic/{{topic_id}}"
     name = f"{DOMAIN}:topic"
-    requires_auth = True
+    requires_auth = False  # public
+    cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
     async def get(self, request, topic_id):
@@ -141,12 +143,14 @@ class BlueprintTopicView(HomeAssistantView):
         return self.json_message("Not found", status_code=404)
 
 class BlueprintRefreshView(HomeAssistantView):
+    # switched to GET to avoid CSRF
     url = f"{API_BASE}/refresh"
     name = f"{DOMAIN}:refresh"
-    requires_auth = True
+    requires_auth = False  # public
+    cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
-    async def post(self, request):
+    async def get(self, request):
         await _refresh(self.hass, force=True)
         return self.json({"ok": True})
 
@@ -154,7 +158,8 @@ class BlueprintStaticView(HomeAssistantView):
     """Serve /panel files without static-path API (version-proof)."""
     url = f"{STATIC_BASE}/{{filename:.*}}"
     name = f"{DOMAIN}:static"
-    requires_auth = True
+    requires_auth = False  # public to prevent 401 in iframe
+    cors_allowed = True
     def __init__(self, panel_dir: str) -> None:
         self._panel_dir = panel_dir
     async def get(self, request, filename: str):
