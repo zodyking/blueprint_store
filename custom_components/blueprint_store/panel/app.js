@@ -111,12 +111,12 @@ function renderCard(it){
 
     <div class="card__footer">
       <div class="stats">
-        <sl-badge pill variant="primary">
+        <span class="stat-pill" title="Likes">
           <sl-icon name="heart"></sl-icon>${likes.toLocaleString()}
-        </sl-badge>
-        <sl-badge pill variant="neutral">
+        </span>
+        <span class="stat-pill" title="Comments">
           <sl-icon name="chat-dots"></sl-icon>${replies.toLocaleString()}
-        </sl-badge>
+        </span>
       </div>
 
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
