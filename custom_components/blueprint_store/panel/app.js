@@ -46,7 +46,6 @@ function showDetail(item) {
   $("#d-excerpt").textContent = item.excerpt || "";
   $("#d-topic").href = item.topic_url;
   $("#d-import").href = item.import_url;
-  document.querySelector("main").style.display = "block"; // ensure main exists
   document.querySelector("main").style.display = "none";
   detailEl.style.display = "block";
 }
@@ -72,10 +71,16 @@ sortEl.addEventListener("change", doFilterAndSort);
 async function load() {
   loadEl.style.display="block"; errorEl.style.display="none"; listEl.style.display="none"; emptyEl.style.display="none";
   try {
-    const res = await fetch(`${API}/blueprints`); // public endpoint now
-    if (!res.ok) throw new Error(await res.text());
-    items = await res.json();
-    doFilterAndSort();
+    const res = await fetch(`${API}/blueprints`);
+    const data = await res.json();
+    if (data.error) {
+      errorEl.textContent = `Failed to load: ${data.error}`;
+      errorEl.style.display = "block";
+      items = [];
+    } else {
+      items = Array.isArray(data) ? data : (data.items || []);
+      doFilterAndSort();
+    }
   } catch (e) {
     errorEl.textContent = `Failed to load: ${String(e.message || e)}`;
     errorEl.style.display = "block";
@@ -85,7 +90,12 @@ async function load() {
 async function refresh() {
   refreshBtn.disabled = true;
   try {
-    await fetch(`${API}/refresh`); // GET (no CSRF/auth)
+    const res = await fetch(`${API}/refresh`);
+    const data = await res.json().catch(()=>({}));
+    if (data && data.error) {
+      errorEl.textContent = `Refresh failed: ${data.error}`;
+      errorEl.style.display = "block";
+    }
     await load();
   } catch (e) {
     errorEl.textContent = `Refresh failed: ${String(e.message || e)}`;
