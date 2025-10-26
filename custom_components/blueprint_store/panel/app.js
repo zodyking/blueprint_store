@@ -34,7 +34,7 @@ async function fetchJSON(url, tries=3){
 /* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
 function openExternal(url){
   try{
-    const w = window.open("", "_blank");   // blank inherits our origin
+    const w = window.open("", "_blank");
     if (w) {
       try { w.opener = null; } catch {}
       const safe = String(url).replace(/"/g, "&quot;");
@@ -146,6 +146,49 @@ function setPostHTML(container, html){
   container.appendChild(tmp);
 }
 
+/* ---------------- stats extraction (robust) ---------------- */
+function num(o, key){
+  if (!o || !(key in o)) return null;
+  const v = Number(o[key]);
+  return Number.isFinite(v) ? v : null;
+}
+function pickFirstNumber(obj, keys){
+  for (const k of keys){
+    const v = num(obj, k);
+    if (v != null) return v;
+  }
+  return null;
+}
+function getLikes(it){
+  // check common locations/keys
+  const pools = [it, it.topic, it.meta, it.discourse];
+  const keys  = ["likes","like_count","likeCount","reactions","reaction_count"];
+  for (const p of pools){
+    const v = pickFirstNumber(p, keys);
+    if (v != null) return v;
+  }
+  return 0;
+}
+function getReplies(it){
+  // prefer a direct reply_count; otherwise derive from posts_count - 1; try many aliases
+  const pools = [it, it.topic, it.meta, it.discourse, it.topic_details];
+  const directKeys = ["reply_count","replies","replyCount","comments","comment_count"];
+  for (const p of pools){
+    const v = pickFirstNumber(p, directKeys);
+    if (v != null) return Math.max(0, v);
+  }
+  // derivable forms
+  const postLikeKeys = ["posts_count","post_count","num_posts","posts","last_post_number"];
+  for (const p of pools){
+    const v = pickFirstNumber(p, postLikeKeys);
+    if (v != null){
+      // last_post_number and posts_count include the OP => subtract 1
+      return Math.max(0, v - 1);
+    }
+  }
+  return 0;
+}
+
 /* cache */
 const detailCache = new Map();
 
@@ -156,21 +199,8 @@ function renderCard(it){
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
 
-  /* >>> FIX HERE: robust replies derivation <<< */
-  const likes =
-    it.likes ??
-    it.like_count ??
-    0;
-
-  const repliesRaw = [
-    it.replies,
-    it.reply_count,                   // Discourse topic-list field
-    (it.posts_count != null ? Number(it.posts_count) - 1 : null),
-    it.comments
-  ].find(v => v != null && !Number.isNaN(Number(v)));
-
-  const replies = Math.max(0, Number(repliesRaw ?? 0));
-  /* >>> END FIX <<< */
+  const likes   = getLikes(it);
+  const replies = getReplies(it);
 
   el.innerHTML = `
     <div class="row">
@@ -223,7 +253,7 @@ function renderCard(it){
     }
   });
 
-  // Intercept open buttons on the card footer
+  // Intercept open buttons on the card footer (import + any in-description pills)
   el.addEventListener("click", (ev)=>{
     const opener = ev.target.closest("[data-open]");
     if (!opener) return;
