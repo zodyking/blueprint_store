@@ -5,17 +5,17 @@
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Shoelace (icons/select/input) -->
     <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
 
     <style>
       :root{
-        --blue-1:#0d5fe0; --blue-2:#0c3d97; --ink:#e6f0ff; --muted:#b9c7e6;
+        --blue-1:#0e52cf; --blue-2:#0b2a7a; --ink:#e6f0ff; --muted:#b9c7e6;
         --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
         --card-bd: rgba(170,200,255,.22);
         --card-bd-hover:#9dd1ff66;
         --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1180px;
+        --footer-h: 170px;
 
         --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
@@ -26,9 +26,9 @@
       body{
         margin:0; color:var(--ink);
         font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, Arial;
-        background:
-          linear-gradient(180deg, #0e52cf 0%, #0b2a7a 100%);
+        background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
         min-height:100vh;
+        padding-bottom: calc(var(--footer-h) + 24px); /* space for sticky footer */
       }
       body::after{
         content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
@@ -48,11 +48,8 @@
 
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
-      sl-input::part(form-control-label){ color:#fff; }
 
-      sl-button.plain::part(base){
-        background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
-      }
+      sl-button.plain::part(base){ background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px; }
       sl-button.plain::part(base):hover{ text-decoration: underline; }
 
       main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
@@ -61,16 +58,6 @@
       .banner img{ width:100%; display:block; }
 
       .section-title{ margin:18px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
-
-      /* spotlight */
-      .spot{ margin-top:8px; padding:16px; border-radius:18px; background:var(--card-bg); border:1px solid var(--card-bd); box-shadow: var(--shadow); }
-      .spot-grid{ display:grid; grid-template-columns:1fr; gap:12px; }
-      @media (min-width:900px){ .spot-grid{ grid-template-columns:repeat(3,1fr); } }
-      .spot-item{ padding:14px; border-radius:12px; border:1px solid #3d5aa844; background: linear-gradient(180deg, rgba(10,20,52,.64), rgba(8,18,46,.74)); min-height:116px; }
-      .spot-head{ font-weight:900; opacity:.95; margin-bottom:6px; }
-      .spot-author{ font-weight:800; margin-bottom:6px; }
-      .spot-title{ color:#dfe8ff; }
-      #spot-spin{ display:none; text-align:center; padding:10px 0; opacity:.8; }
 
       /* cards */
       .card{
@@ -89,9 +76,9 @@
         border-radius: 12px;
         padding: 12px;
       }
-      .desc{ color:#e6edff; line-height:1.55; }
+      .desc{ color:#e6edff; line-height:1.55; word-break:break-word; }
 
-      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; gap:10px; flex-wrap:wrap; }
       .likes-pill{
         display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px;
         border:1px solid #8fb6ff55; background:#0a1a42; font-weight:800;
@@ -107,10 +94,32 @@
         box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
         border: 1px solid rgba(255,255,255,.35);
       }
+      .myha-btn.disabled{
+        background:#20324f; color:#9fb3d9; cursor:default; border-color:#3a4f7a;
+        box-shadow:none;
+      }
 
       .toggle{ margin-top:10px; color:#cfe2ff; font-weight:800; cursor:pointer; background:transparent; border:none; }
+
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
+
+      /* sticky footer spotlight */
+      footer.spot-footer{
+        position:sticky; bottom:0; z-index:6;
+        background: linear-gradient(180deg, rgba(7,14,42,.4), rgba(5,10,30,.75));
+        backdrop-filter: blur(6px);
+        border-top: 1px solid #ffffff2a;
+        height: var(--footer-h);
+      }
+      .spot{ max-width:var(--maxw); margin:10px auto; padding:12px; }
+      .spot-grid{ display:grid; grid-template-columns:1fr; gap:10px; }
+      @media (min-width:900px){ .spot-grid{ grid-template-columns:repeat(3,1fr); } }
+      .spot-item{ padding:12px; border-radius:12px; border:1px solid #3d5aa844; background: linear-gradient(180deg, rgba(10,20,52,.64), rgba(8,18,46,.74)); min-height:110px; }
+      .spot-head{ font-weight:900; opacity:.95; margin-bottom:6px; }
+      .spot-author{ font-weight:800; margin-bottom:6px; }
+      .spot-title{ color:#dfe8ff; }
+      #spot-spin{ display:none; text-align:center; padding:6px 0; opacity:.85; }
     </style>
   </head>
   <body>
@@ -143,17 +152,6 @@
     <main>
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <div id="spotlight" class="spot">
-        <div style="text-align:center; font-weight:900; margin-bottom:4px;">Creators Spotlight</div>
-        <div style="text-align:center; opacity:.85; margin-bottom:10px;">Shout-outs to makers moving the community forward.</div>
-        <div id="spot-spin">Loading…</div>
-        <div class="spot-grid">
-          <div class="spot-item" id="spot-popular"></div>
-          <div class="spot-item" id="spot-uploaded"></div>
-          <div class="spot-item" id="spot-recent"></div>
-        </div>
-      </div>
-
       <div class="section-title" id="heading">All blueprints</div>
       <div id="list"></div>
 
@@ -162,6 +160,20 @@
       <div id="sentinel"></div>
     </main>
 
-    <script src="./app.js?v=restore-single-desc-spot-accurate" defer></script>
+    <!-- Sticky footer: Creators Spotlight -->
+    <footer class="spot-footer">
+      <div id="spotlight" class="spot">
+        <div style="text-align:center; font-weight:900; margin-bottom:4px;">Creators Spotlight</div>
+        <div style="text-align:center; opacity:.85; margin-bottom:6px;">Shout-outs to makers moving the community forward.</div>
+        <div id="spot-spin">Loading…</div>
+        <div class="spot-grid">
+          <div class="spot-item" id="spot-popular"></div>
+          <div class="spot-item" id="spot-uploaded"></div>
+          <div class="spot-item" id="spot-recent"></div>
+        </div>
+      </div>
+    </footer>
+
+    <script src="./app.js?v=footer-spot-single-desc-fixes" defer></script>
   </body>
 </html>
