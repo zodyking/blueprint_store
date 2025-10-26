@@ -1,16 +1,17 @@
 <!doctype html>
 <html>
   <head>
-    <meta charset="utf-8"/>
+    <meta charset="utf-8" />
     <title>Blueprint Store</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <!-- Shoelace (Web Components) -->
-    <script type="module"
+    <script
+      type="module"
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (for removable chips if needed later) -->
+    <!-- Material Web (reserved; no heavy usage right now) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
@@ -25,16 +26,17 @@
         --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1200px;
 
-        /* Controls */
+        /* Shoelace controls */
         --sl-input-background-color: transparent; /* transparent search */
         --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
         --sl-panel-background-color: rgba(16,34,86,.98);
       }
 
+      * { box-sizing: border-box; }
       body{
         margin:0; color:var(--ink);
-        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu;
+        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
         background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
         min-height:100vh;
       }
@@ -57,6 +59,7 @@
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
       sl-input::part(form-control-label){ color:#fff; }
+
       /* plain top-menu button (no outline) */
       sl-button.plain::part(base){
         background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
@@ -158,7 +161,7 @@
       <div id="sentinel"></div>
     </main>
 
-    <!-- IMPORTANT: module so we can use top-level await in app.js -->
-    <script type="module" src="./app.js"></script>
+    <!-- IMPORTANT: no top-level await; load deferred -->
+    <script src="./app.js" defer></script>
   </body>
 </html>
