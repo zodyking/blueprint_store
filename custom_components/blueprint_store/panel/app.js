@@ -1,7 +1,7 @@
 /* Blueprint Store panel JS
- * - Robust sort control (new / likes / title) with request cancellation
+ * - Hardened sort control (new / likes / title) with request cancellation
  * - Infinite scroll & search
- * - Safe external opener & forum redirect
+ * - Stats pill: Likes + Active installs (installs parsed from forum banner)
  */
 
 const API = "/api/blueprint_store";
@@ -37,6 +37,17 @@ async function fetchJSON(url, tries=3){
   }
 }
 
+/* human-ish compact number (1.2k, 23.7k…) */
+function fmt(n){
+  if (n == null) return "0";
+  const abs = Math.abs(n);
+  if (abs >= 1000) {
+    const v = Math.round((n/1000) * 10) / 10;
+    return `${v}${(v % 1 === 0) ? "" : ""}k`;
+  }
+  return String(n);
+}
+
 /* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
 function openExternal(url){
   try{
@@ -68,6 +79,7 @@ function importButton(href){
       Import to Home Assistant
     </a>`;
 }
+
 function viewDescButton(){
   return `
     <button class="myha-btn neutral" data-viewdesc="1" type="button">
@@ -75,15 +87,19 @@ function viewDescButton(){
       View description
     </button>`;
 }
-function forumButtonRedirect(tid, slug){
+
+/* Stats pill (❤️ likes + 👥 installs) that still opens the forum post */
+function forumStatsPill(tid, slug, likes){
   const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
   const href = `${API}/go?${qs}`;
   return `
-    <a class="myha-btn secondary" data-open="${esc(href)}">
-      <sl-icon name="box-arrow-up-right"></sl-icon>
-      Forum post
+    <a class="myha-btn secondary stats" data-open="${esc(href)}" data-tid="${esc(String(tid))}">
+      <span class="pair"><sl-icon name="heart"></sl-icon><span class="num" data-likes>${esc(fmt(likes || 0))}</span></span>
+      <span class="sep" aria-hidden="true"></span>
+      <span class="pair"><sl-icon name="people"></sl-icon><span class="num" data-installs>…</span></span>
     </a>`;
 }
+
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
 /* tags renderer */
@@ -151,13 +167,47 @@ function setPostHTML(container, html){
   container.appendChild(tmp);
 }
 
-/* cache */
-const detailCache = new Map();
+/* ---- installs scraping from cooked post HTML ---- */
+
+function extractInstallsFromCooked(cookedHTML){
+  // Strategy: find the Import-banner (we replaced it with a pill in setPostHTML),
+  // but in raw cooked content there is a small numeric badge next to it.
+  // We parse the neighborhood text for a number like "23.7k" or "147".
+  const tmp = document.createElement("div");
+  tmp.innerHTML = cookedHTML || "";
+  const a = tmp.querySelector('a[href*="my.home-assistant.io/redirect/blueprint_import"]')
+          || tmp.querySelector('a[href*="redirect/blueprint_import"]');
+  if (!a) return null;
+
+  // Gather nearby text (siblings & parent) to catch the little badge
+  let text = "";
+  const collect = (el, depth=0)=>{
+    if (!el || depth>2) return;
+    text += " " + (el.textContent || "").trim();
+    collect(el.nextElementSibling, depth+1);
+  };
+  collect(a);
+  if (a.parentElement) text += " " + (a.parentElement.textContent || "");
+
+  const m = text.match(/(\d+(?:\.\d+)?)(\s*[kK])?\b/);
+  if (!m) return null;
+
+  let v = parseFloat(m[1]);
+  if (!isFinite(v)) return null;
+  if (m[2]) v *= 1000;
+  return Math.round(v);
+}
+
+/* caches */
+const detailCache = new Map();     // id -> cooked html
+const installsCache = new Map();   // id -> installs number
 
 /* card */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
+  el.setAttribute("data-card", String(it.id));
+
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
 
@@ -174,10 +224,45 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButtonRedirect(it.id, it.slug || "")}
+      ${forumStatsPill(it.id, it.slug || "", it.likes)}
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
+
+  // --- fetch installs lazily when card enters viewport ---
+  const ensureInstalls = async () => {
+    if (installsCache.has(it.id)) {
+      const n = installsCache.get(it.id);
+      const tgt = el.querySelector("[data-installs]");
+      if (tgt) tgt.textContent = fmt(n || 0);
+      return;
+    }
+    try{
+      // Try to reuse cooked if we already fetched it via "Read more"
+      let cooked = detailCache.get(it.id);
+      if (!cooked) {
+        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+        cooked = data.cooked || "";
+        detailCache.set(it.id, cooked);
+      }
+      const n = extractInstallsFromCooked(cooked) ?? 0;
+      installsCache.set(it.id, n);
+      const tgt = el.querySelector("[data-installs]");
+      if (tgt) tgt.textContent = fmt(n);
+    }catch{
+      const tgt = el.querySelector("[data-installs]");
+      if (tgt) tgt.textContent = "0";
+    }
+  };
+
+  const io = new IntersectionObserver((entries)=>{
+    if (entries[0] && entries[0].isIntersecting){
+      io.disconnect();
+      // small delay so rapid scrolling doesn't stampede requests
+      setTimeout(ensureInstalls, 60);
+    }
+  }, { rootMargin: "600px" });
+  io.observe(el);
 
   // Read more / less
   const toggle = el.querySelector(".toggle");
@@ -193,6 +278,15 @@ function renderCard(it){
           detailCache.set(it.id, data.cooked || "");
         }
         setPostHTML(more, detailCache.get(it.id));
+        // if installs not known yet, try to extract now
+        if (!installsCache.has(it.id)) {
+          const n = extractInstallsFromCooked(detailCache.get(it.id));
+          if (n != null) {
+            installsCache.set(it.id, n);
+            const tgt = el.querySelector("[data-installs]");
+            if (tgt) tgt.textContent = fmt(n);
+          }
+        }
       }catch(e){
         setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
       }finally{
