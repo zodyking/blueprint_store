@@ -1,158 +1,216 @@
-/* Blueprint Store — UI glue
- * Scope: only the requested fixes (single growable desc area; cleaned titles for Hall of Builders; centered/renamed section; blue→black bg is in CSS)
- */
+/* Blueprint Store – UI glue
+ * Scope: only fixes requested (single desc, likes pill, dark desc area,
+ * dynamic heading, normalize import badges, contributors strip). */
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 /* ---------- small helpers ---------- */
-const $$ = (s) => Array.from(document.querySelectorAll(s));
-function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
-const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
-const debounce = (fn, ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
-async function fetchJSON(url, tries=3){
-  let delay = 600;
-  for(let i=0;i<tries;i++){
-    try{
+async function fetchJSON(url, tries = 3) {
+  let backoff = 500;
+  for (let i = 0; i < tries; i++) {
+    try {
       const res = await fetch(url);
-      if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const data = await res.json();
-      if (data && data.error) throw new Error(data.error);
-      return data;
-    }catch(e){
-      if (i < tries-1 && /429/.test(String(e))) { await sleep(delay + Math.random()*250); delay*=2; continue; }
-      throw e;
+      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const j = await res.json();
+      if (j && j.error) throw new Error(j.error);
+      return j;
+    } catch (e) {
+      const msg = String(e?.message ?? e);
+      if (i < tries - 1 && /429|502|503/.test(msg)) { await sleep(backoff); backoff *= 2; continue; }
+      throw new Error(`fetch: ${msg}`);
     }
   }
 }
 
-/* ---------- Title parsing utilities (for cards & Hall of Builders) ---------- */
-function titleCaseSmart(s){
-  const keepCaps = /^(AI|CPU|GPU|ZHA|Z2M|MQTT|ZBMINI|ZHA|HA|ESP|RTSP|RGB)$/i;
-  return s.split(/\s+/).map(w=>{
-    if (keepCaps.test(w) && w === w.toUpperCase()) return w;
-    if (/^[A-Z0-9]{2,}$/.test(w)) return w;           // already caps
-    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-  }).join(" ");
-}
+/* ----- formatting ----- */
+function k(n){ if (n == null) return "0"; const x = Number(n); if (!Number.isFinite(x)) return "0"; if (x >= 1_000_000) return `${(x/1_000_000).toFixed(1).replace(/\.0$/, "")}m`; if (x >= 1_000) return `${(x/1_000).toFixed(1).replace(/\.0$/, "")}k`; return `${x}`; }
+function likePill(likes){ return `
+  <span class="likes-pill" aria-label="${likes} people liked this">
+    <i class="heart" aria-hidden="true"></i>
+    <span>${k(likes)}</span>
+    <span>Liked This</span>
+  </span>`; }
+
+/* ----- title parsing for spotlight & cards (only visual) ----- */
 function cleanTitle(raw){
   if (!raw) return "";
   let s = String(raw);
-  s = s.replace(/\[blueprint\]\s*/i, "");          // remove “[Blueprint]”
-  s = s.replace(/^[^A-Za-z(]+/, "");               // strip leading emojis/symbols
-  s = s.replace(/[^0-9A-Za-z()\- _:]/g, "");       // keep (), hyphen, space, colon, underscore
-  return titleCaseSmart(s).replace(/\s{2,}/g," ").trim();
+
+  // remove explicit "[Blueprint]" marker
+  s = s.replace(/\[ *blueprint *\]\s*/ig, "");
+
+  // strip leading emojis/non-alnum
+  s = s.replace(/^[^\p{L}\p{N}(]+/u, "");
+
+  // allow letters, numbers, whitespace, () and simple separators
+  s = s.replace(/[^\p{L}\p{N}\s()\-:]/gu, " ");
+
+  // squash whitespace
+  s = s.replace(/\s{2,}/g, " ").trim();
+
+  // Title Case while preserving acronyms
+  s = s.split(" ").map(w=>{
+    if (w === w.toUpperCase() && w.length >= 2) return w; // acronym
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(" ");
+
+  // minor cosmetic: " - " spacing normalized (keep dashes)
+  s = s.replace(/\s*-\s*/g, " - ");
+  return s;
 }
 
-/* ---------- Recognition / “Hall of Builders” ---------- */
-function renderContrib(sectionStats){
-  const host = $("#contrib");
-  const grid = $("#contrib-grid");
-  if (!host || !grid) return;
-
-  // Expect shape (provided by your backend): { most_popular:{author,title}, most_uploads:{author,count}, most_recent:{author,title} }
-  const mp = sectionStats?.most_popular || {};
-  const mu = sectionStats?.most_uploads || {};
-  const mr = sectionStats?.most_recent  || {};
-
-  const cards = [
-    { label:"Most Popular Blueprint", author: mp.author || "—", sub: cleanTitle(mp.title || "—") },
-    { label:"Most Uploaded Blueprints", author: mu.author || "—", sub: `${mu.count || 0} blueprint(s)` },
-    { label:"Most Recent Upload", author: mr.author || "—", sub: cleanTitle(mr.title || "—") },
-  ];
-
-  grid.innerHTML = cards.map(c=>`
-    <div class="contrib-card">
-      <div class="contrib-title">${esc(c.label)}</div>
-      <div class="contrib-author">${esc(titleCaseSmart(c.author))}</div>
-      <div class="contrib-sub">${esc(c.sub)}</div>
-    </div>
-  `).join("");
-
-  host.style.display = "block";
+/* ----- rewrite MyHA banners inside cooked description to compact pills ----- */
+function rewriteCooked(container){
+  container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    a.classList.add("import-btn");
+    a.innerHTML = `<sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>`;
+  });
 }
 
-/* ---------- Cards ---------- */
+/* cache cooked HTML by topic id */
 const detailCache = new Map();
 
-function likesPill(it){
-  const likeText = `${it.likes_str || it.likes || 0} Liked This`;
-  return `<span class="likes-pill"><i class="icon"></i>${esc(likeText)}</span>`;
-}
-
-function tagPills(tags){
-  const set = [];
-  (tags || []).forEach(t => {
-    const v = (t || "").toString().trim();
-    if (v && !set.includes(v)) set.push(v);
-  });
-  if (!set.length) return "";
-  return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
-}
-
+/* -------- card renderer (single expandable description) -------- */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
 
-  const title = cleanTitle(it.title);
-  const author = it.author ? `by ${titleCaseSmart(it.author)}` : "";
-
-  el.innerHTML = `
+  const header = `
     <div class="row">
-      <h3>${esc(title)}</h3>
-      ${it.author ? `<span class="author">${esc(author)}</span>` : ""}
+      <h3 title="${esc(it.title)}">${esc(cleanTitle(it.title))}</h3>
+      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
     </div>
-
-    ${tagPills([it.bucket, ...(it.tags || []).slice(0,3)])}
-
-    <div class="desc-wrap" id="desc-${it.id}">
-      <div class="desc-teaser">${esc(it.excerpt || "")}</div>
-      <div class="desc-full" id="full-${it.id}"></div>
-    </div>
-
-    <div class="toggle" data-id="${it.id}">Read more</div>
-    ${likesPill(it)}
+    <div class="tags">${(it.tags||[]).slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
   `;
 
-  // Expand/Collapse
-  const wrap   = el.querySelector(`#desc-${it.id}`);
-  const fullEl = el.querySelector(`#full-${it.id}`);
-  const toggle = el.querySelector(".toggle");
-  let expanded = false;
+  const desc = `
+    <div class="desc-wrap collapsed" id="wrap-${it.id}">
+      <p class="desc" id="desc-${it.id}">${esc(it.excerpt || "")}</p>
+      <div class="grad"></div>
+      <div class="toggle" id="tog-${it.id}">Read more</div>
+    </div>
+  `;
 
-  async function ensureFullLoaded(){
+  const footer = `
+    <div class="meta">${likePill(it.likes||0)}</div>
+    <div class="card__footer">
+      <a class="import-btn" href="${esc(it.import_url)}" target="_blank" rel="noopener">
+        <sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>
+      </a>
+    </div>
+  `;
+
+  el.innerHTML = header + desc + footer;
+
+  // expand/collapse
+  const wrap = el.querySelector(`#wrap-${it.id}`);
+  const tog  = el.querySelector(`#tog-${it.id}`);
+
+  async function expand(){
     if (!detailCache.has(it.id)) {
       try{
         const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-        detailCache.set(it.id, data.cooked || "<em>Nothing to show.</em>");
+        const tmp = document.createElement("div");
+        tmp.innerHTML = data.cooked || "";
+        rewriteCooked(tmp);
+        detailCache.set(it.id, tmp.innerHTML);
       }catch(e){
         detailCache.set(it.id, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
       }
     }
-    fullEl.innerHTML = detailCache.get(it.id);
+    // replace excerpt with cooked HTML
+    wrap.classList.remove("collapsed");
+    wrap.querySelector(".grad")?.remove();
+    wrap.querySelector(".desc").outerHTML = `<div class="desc" style="-webkit-line-clamp:unset; overflow:visible">${detailCache.get(it.id)}</div>`;
+    tog.textContent = "Less";
   }
 
-  toggle.addEventListener("click", async () => {
-    if (!expanded){
-      await ensureFullLoaded();
-      wrap.classList.add("expanded");
-      toggle.textContent = "Less";
-      expanded = true;
-    }else{
-      wrap.classList.remove("expanded");
-      toggle.textContent = "Read more";
+  let expanded = false;
+  tog.addEventListener("click", async () => {
+    if (!expanded){ expanded = true; await expand(); }
+    else { // collapse back to excerpt
       expanded = false;
+      wrap.innerHTML = `
+        <p class="desc">${esc(it.excerpt || "")}</p>
+        <div class="grad"></div>
+        <div class="toggle">Read more</div>
+      `;
+      wrap.classList.add("collapsed");
+      wrap.querySelector(".toggle").addEventListener("click", async ()=>{ if (!expanded){ expanded=true; await expand(); } });
     }
   });
 
   return el;
 }
 
-function appendItems(target, items){
-  for (const it of items) target.appendChild(renderCard(it));
+/* ----- list plumbing ----- */
+function appendItems(target, items){ for (const it of items) target.appendChild(renderCard(it)); }
+
+/* ----- spotlight (creators) ----- */
+function buildSpotlight(items){
+  if (!items?.length) return;
+  const byAuthor = new Map();
+  let mostPopular = items[0];
+
+  for (const it of items){
+    if (!byAuthor.has(it.author)) byAuthor.set(it.author, []);
+    byAuthor.get(it.author).push(it);
+    if ((it.likes||0) > (mostPopular.likes||0)) mostPopular = it;
+  }
+
+  // most uploaded
+  let topAuthor = null, topCount = 0;
+  for (const [a, arr] of byAuthor){
+    if (arr.length > topCount){ topAuthor = a; topCount = arr.length; }
+  }
+
+  // most recent = first item when sort=new (we call spotlight after initial load with sort=new)
+  const mostRecent = items[0];
+
+  const grid = $("#contribGrid");
+  const host = $("#contrib");
+  if (!grid || !host) return;
+
+  grid.innerHTML = `
+    <div class="contrib-card">
+      <h4>Most Popular Blueprint</h4>
+      <div class="contrib-title">${esc(mostPopular?.author ?? "—")}</div>
+      <div style="margin-top:8px">${esc(cleanTitle(mostPopular?.title ?? ""))}</div>
+    </div>
+    <div class="contrib-card">
+      <h4>Most Uploaded Blueprints</h4>
+      <div class="contrib-title">${esc(topAuthor ?? "—")}</div>
+      <div class="contrib-chip">${k(topCount)} blueprint(s)</div>
+    </div>
+    <div class="contrib-card">
+      <h4>Most Recent Upload</h4>
+      <div class="contrib-title">${esc(mostRecent?.author ?? "—")}</div>
+      <div style="margin-top:8px">${esc(cleanTitle(mostRecent?.title ?? ""))}</div>
+    </div>
+  `;
+  host.style.display = "block";
 }
 
-/* ---------- Boot / Paging / Filters (unchanged behavior) ---------- */
+/* ----- dynamic heading ----- */
+function updateHeading({sort, bucket, q}) {
+  const h = $("#headingEl"); if (!h) return;
+  let base = "All blueprints";
+  if (sort === "likes") base = "Most liked blueprints";
+  else if (sort === "title") base = "Titles A–Z";
+  else base = "Newest blueprints";
+
+  const parts = [base];
+  if (bucket) parts.push(`tag: ${bucket}`);
+  if (q) parts.push(`query: “${q}”`);
+  h.textContent = parts.join(" • ");
+}
+
+/* ----- boot ----- */
 function boot(){
   const list   = $("#list");
   const empty  = $("#empty");
@@ -160,12 +218,10 @@ function boot(){
   const search = $("#search");
   const sortSel = $("#sort");
   const refreshBtn = $("#refresh");
-  const sentinel = $("#sentinel");
 
   const tagdd = $("#tagdd");
   const tagbtn = $("#tagbtn");
   const tagmenu = $("#tagmenu");
-  const headingEl = $("#heading");
 
   if (!list) return;
 
@@ -175,21 +231,10 @@ function boot(){
   let hasMore = true;
   let sort = "new";
   let bucket = "";
+  let spotlightSeed = []; // for spotlight on first load
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
   const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
-
-  function updateHeading(){
-    let parts = [];
-    if (sort === "likes") parts.push("Most liked");
-    else if (sort === "title") parts.push("Title A–Z");
-    else parts.push("Newest");
-
-    if (bucket) parts.push(`• ${bucket}`);
-    if (qTitle) parts.push(`• “${qTitle}”`);
-
-    headingEl.textContent = parts.join(" ") + " blueprints";
-  }
 
   async function fetchFilters(){
     try{
@@ -203,39 +248,35 @@ function boot(){
         const val = ev.detail.item.value || "";
         bucket = val;
         tagbtn.textContent = bucket || "All tags";
-        updateHeading();
-        await loadAllForSearch();
+        updateHeading({sort, bucket, q:qTitle});
+        await loadAll(true);
         if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
       });
-    }catch(e){ /* optional */ }
+    }catch(e){ /* ignore */ }
   }
 
-  async function fetchContrib(){
-    try{
-      const data = await fetchJSON(`${API}/contrib`);
-      renderContrib(data || {});
-    }catch(e){ /* soft fail */ }
-  }
-
-  async function fetchPage(p){
+  function pageURL(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
     if (qTitle) url.searchParams.set("q_title", qTitle);
-    if (sort)   url.searchParams.set("sort", sort);
+    if (sort) url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
-    return await fetchJSON(url.toString());
+    return url.toString();
   }
 
-  async function load(initial=false){
-    if (loading || (!hasMore && !initial)) return;
+  async function load(first=false){
+    if (loading || (!hasMore && !first)) return;
     loading = true; clearError();
     try{
-      const data = await fetchPage(page);
+      const data = await fetchJSON(pageURL(page));
       const items = data.items || [];
       hasMore = !!data.has_more;
-      if (initial){
+
+      if (first){
         list.innerHTML = "";
         if (empty) empty.style.display = items.length ? "none" : "block";
+        spotlightSeed = items.slice(0, 18); // decent seed for spotlight
+        if (sort === "new") buildSpotlight(spotlightSeed);
       }
       appendItems(list, items);
       page += 1;
@@ -246,42 +287,47 @@ function boot(){
     }
   }
 
-  async function loadAllForSearch(){
-    page = 0; hasMore = true; list.innerHTML = ""; clearError();
-    let first = true;
-    while (hasMore) {
-      await load(first); first = false;
-      await sleep(6);
-    }
+  async function loadAll(firstPage=false){
+    // reset then load all available pages to satisfy tag+search
+    page = 0; hasMore = true;
+    updateHeading({sort, bucket, q:qTitle});
+    await load(true);
+    // progressive fill
+    while (hasMore) { await load(false); await sleep(8); }
   }
 
+  // search
   if (search){
-    const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); updateHeading(); await loadAllForSearch(); }, 280);
+    const onSearch = debounce(async ()=>{
+      qTitle = (search.value || "").trim();
+      await loadAll(true);
+    }, 260);
     search.addEventListener("sl-input", onSearch);
     search.addEventListener("sl-clear", onSearch);
   }
+
+  // sort
   if (sortSel){
-    sortSel.addEventListener("sl-change", async () => {
-      const val = sortSel.value;
-      if (val === "likes" || val === "title" || val === "new") sort = val; // guard
-      updateHeading();
-      await loadAllForSearch();
+    sortSel.addEventListener("sl-change", async ()=>{
+      sort = sortSel.value || "new";
+      await loadAll(true);
     });
   }
+
+  // refresh
   if (refreshBtn){
-    refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
+    refreshBtn.addEventListener("click", async ()=>{ await loadAll(true); });
   }
 
+  // infinite
+  const sentinel = $("#sentinel");
   if (sentinel){
-    const io = new IntersectionObserver((entries)=>{
-      if (entries[0] && entries[0].isIntersecting) load(false);
-    },{ rootMargin:"700px" });
+    const io = new IntersectionObserver((entries)=>{ if (entries[0]?.isIntersecting) load(false); }, {rootMargin:"700px"});
     io.observe(sentinel);
   }
 
-  updateHeading();
   fetchFilters();
-  fetchContrib();
+  updateHeading({sort, bucket, q:qTitle});
   load(true);
 }
 
