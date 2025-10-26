@@ -1,13 +1,13 @@
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
 
-/* helpers */
+/* ---------- helpers ---------- */
 const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn, ms=260)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const debounce = (fn, ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
 async function fetchJSON(url, tries = 3) {
-  let delay = 500;
+  let delay = 450;
   for (let i=0;i<tries;i++){
     try{
       const res = await fetch(url);
@@ -26,7 +26,7 @@ async function fetchJSON(url, tries = 3) {
 const k = n => { const x = Number(n||0); if (x>=1e6) return (x/1e6).toFixed(1).replace(/\.0$/,"")+"m"; if (x>=1e3) return (x/1e3).toFixed(1).replace(/\.0$/,"")+"k"; return String(x|0); };
 const likePill = likes => `<span class="likes-pill"><i class="heart" aria-hidden="true"></i><span>${k(likes)}</span><span>Liked This</span></span>`;
 
-/* safe title cleanup */
+/* title cleanup */
 function cleanTitle(raw){
   if (!raw) return "";
   let s = String(raw);
@@ -39,7 +39,7 @@ function cleanTitle(raw){
   return s;
 }
 
-/* import counters in cooked */
+/* cooked rewriting + count imports */
 function rewriteCookedAndCount(container){
   let importCount = 0;
   container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
@@ -51,8 +51,8 @@ function rewriteCookedAndCount(container){
 }
 const cookedCache = new Map(); // id -> {html, count}
 
-/* TOKENIZED SEARCH (per-word, ranked) */
-const STOP = new Set(["a","an","and","the","of","to","in","on","for","is","are","with","by","or","at","as","be","this","that","it","from","into"]);
+/* SEARCH */
+const STOP = new Set(["a","an","and","the","of","to","in","on","for","is","are","with","by","or","at","as","be","this","that","it","from","into","your","you"]);
 function tokenize(q){
   if (!q) return [];
   const out = [];
@@ -69,9 +69,9 @@ function scoreItem(it, tokens){
   const tags  = (it.tags||[]).map(String).join(" ").toLowerCase();
   let score = 0;
   for (const t of tokens){
-    if (title.includes(t)) score += 5;
-    if (tags.includes(t))  score += 3;
-    if (desc.includes(t))  score += 1;
+    if (title.includes(t)) score += 6;   // strongest
+    if (tags.includes(t))  score += 4;
+    if (desc.includes(t))  score += 2;
   }
   return score;
 }
@@ -169,17 +169,17 @@ async function buildSpotlight(){
       <div class="contrib-card">
         <h4>Most Popular Blueprint</h4>
         <div class="contrib-title">${esc(mostPopular?.author ?? "—")}</div>
-        <div class="contrib-chip">${esc(cleanTitle(mostPopular?.title ?? "—"))}</div>
+        <div class="contrib-line">${esc(cleanTitle(mostPopular?.title ?? "—"))}</div>
       </div>
       <div class="contrib-card">
         <h4>Most Uploaded Blueprints</h4>
         <div class="contrib-title">${esc(topAuthor)}</div>
-        <div class="contrib-chip">${k(topCount)} Blueprints</div>
+        <div class="contrib-line">${k(topCount)} Blueprints</div>
       </div>
       <div class="contrib-card">
         <h4>Most Recent Upload</h4>
         <div class="contrib-title">${esc(mostRecent?.author ?? "—")}</div>
-        <div class="contrib-chip">${esc(cleanTitle(mostRecent?.title ?? "—"))}</div>
+        <div class="contrib-line">${esc(cleanTitle(mostRecent?.title ?? "—"))}</div>
       </div>
     `;
   }catch{
@@ -237,7 +237,7 @@ function boot(){
       tagmenu.addEventListener("sl-select", async (ev)=>{
         bucket = ev.detail.item.value || "";
         tagbtn.textContent = bucket || "All tags";
-        await loadAll(true);
+        await loadAll(false);
         if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
       });
     }catch{}
@@ -246,7 +246,7 @@ function boot(){
   function pageURL(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
-    if (qText) url.searchParams.set("q_title", qText);  // server-side title match
+    // no q_title on purpose for search-by-description; server-side filter would miss desc matches
     if (sort) url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
     return url.toString();
@@ -268,38 +268,61 @@ function boot(){
     }finally{ loading = false; }
   }
 
-  async function loadSearch(myEpoch){
-    // Accumulate everything, score & rank
-    list.innerHTML = "";
-    empty.style.display = "none";
-    clearError();
-
+  // Progressive search: rank + render after each page
+  async function progressiveSearch(myEpoch){
+    list.innerHTML = ""; empty.style.display = "none"; clearError();
     let p=0, more=true;
-    const all=[];
+    const collected=[]; const TOP_LIMIT = 400; const FIRST_SHOW = 1; // show after first page
+    let firstShown=false;
+
     while (more){
       const r = await fetchJSON(pageURL(p));
       if (myEpoch !== epoch) return;
+
       (r?.items||[]).forEach(it=>{
         it.__score = scoreItem(it, qTokens);
-        if (it.__score>0) all.push(it);
+        if (it.__score>0) collected.push(it);
       });
-      more = !!r?.has_more; p++;
+
+      // keep list bounded for speed
+      if (collected.length > TOP_LIMIT) {
+        collected.sort((a,b)=>b.__score - a.__score);
+        collected.length = TOP_LIMIT;
+      }
+
+      if (!firstShown && p>=FIRST_SHOW){
+        firstShown = true;
+        renderRanked(collected);
+      }else if (firstShown){
+        // refresh view every 2 pages for responsiveness
+        if (p % 2 === 0) renderRanked(collected);
+      }
+
+      more = !!r?.has_more;
+      p++;
+
+      // Safety cap (speed): stop after 30 pages
+      if (p>=30) break;
     }
 
-    if (!all.length){
-      empty.style.display = "block";
-      return;
+    if (!firstShown) {
+      if (collected.length) renderRanked(collected);
+      else empty.style.display = "block";
+    } else {
+      renderRanked(collected);
     }
+  }
 
-    // Rank: score desc, then by sort choice as tiebreaker
-    all.sort((a,b)=>{
+  function renderRanked(arr){
+    const items = [...arr];
+    items.sort((a,b)=>{
       if (b.__score !== a.__score) return b.__score - a.__score;
       if (sort==="likes") return (b.likes||0) - (a.likes||0);
       if (sort==="title") return String(a.title||"").localeCompare(String(b.title||""));
-      return 0; // newest already via API pages, tie acceptable
+      return 0;
     });
-
-    appendItems(list, all);
+    list.innerHTML = "";
+    appendItems(list, items);
   }
 
   async function loadAll(resetSpotlight=false){
@@ -310,7 +333,7 @@ function boot(){
     if (io) io.disconnect();
 
     if (qTokens.length){
-      await loadSearch(myEpoch);
+      await progressiveSearch(myEpoch);
     }else{
       await loadInfinite(true, myEpoch);
       if (sentinel){
@@ -327,7 +350,7 @@ function boot(){
       qText = (search.value || "").trim();
       qTokens = tokenize(qText);
       await loadAll(false);
-    }, 260);
+    }, 220);
     search.addEventListener("sl-input", onSearch);
     search.addEventListener("sl-clear", onSearch);
   }
