@@ -1,7 +1,7 @@
 {
   "domain": "blueprint_store",
   "name": "Blueprint Store",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "documentation": "https://example.invalid/blueprint_store",
   "issue_tracker": "https://example.invalid/blueprint_store/issues",
   "iot_class": "cloud_polling",
