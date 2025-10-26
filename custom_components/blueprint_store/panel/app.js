@@ -39,7 +39,7 @@ function cleanTitle(raw){
   return s;
 }
 
-/* count import buttons in cooked */
+/* import counters in cooked */
 function rewriteCookedAndCount(container){
   let importCount = 0;
   container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
@@ -49,25 +49,31 @@ function rewriteCookedAndCount(container){
   });
   return importCount;
 }
-
 const cookedCache = new Map(); // id -> {html, count}
 
-/* tokenized search */
+/* TOKENIZED SEARCH (per-word, ranked) */
+const STOP = new Set(["a","an","and","the","of","to","in","on","for","is","are","with","by","or","at","as","be","this","that","it","from","into"]);
 function tokenize(q){
   if (!q) return [];
   const out = [];
   (q.toLowerCase().match(/"([^"]+)"|(\S+)/g) || []).forEach(m=>{
     const t = m.replace(/^"|"$/g,"").trim();
-    if (t) out.push(t);
+    if (t && !STOP.has(t) && t.length>1) out.push(t);
   });
   return out;
 }
-function matchesTokens(it, tokens){
-  if (!tokens.length) return true;
-  const hayTitle = (it.title||"").toLowerCase();
-  const hayDesc  = (it.excerpt||"").toLowerCase();
-  const hayTags  = (it.tags||[]).map(t=>String(t).toLowerCase()).join(" ");
-  return tokens.every(tok => hayTitle.includes(tok) || hayDesc.includes(tok) || hayTags.includes(tok));
+function scoreItem(it, tokens){
+  if (!tokens.length) return 0;
+  const title = (it.title||"").toLowerCase();
+  const desc  = (it.excerpt||"").toLowerCase();
+  const tags  = (it.tags||[]).map(String).join(" ").toLowerCase();
+  let score = 0;
+  for (const t of tokens){
+    if (title.includes(t)) score += 5;
+    if (tags.includes(t))  score += 3;
+    if (desc.includes(t))  score += 1;
+  }
+  return score;
 }
 
 /* card renderer */
@@ -135,10 +141,10 @@ function renderCard(it){
 }
 function appendItems(target, items){ for(const it of items) target.appendChild(renderCard(it)); }
 
-/* Spotlight (fast & robust) */
+/* Spotlight */
 async function buildSpotlight(){
-  const host = $("#contrib"); const grid = $("#contribGrid");
-  if (!host || !grid) return;
+  const grid = $("#contribGrid");
+  if (!grid) return;
 
   try{
     const [liked, recent] = await Promise.all([
@@ -148,7 +154,7 @@ async function buildSpotlight(){
     const mostPopular = liked?.items?.[0] || null;
     const mostRecent  = recent?.items?.[0] || null;
 
-    // most uploads: scan first few pages quickly
+    // most uploads: scan a few pages quickly
     let page=0, hasMore=true, maxPages=5;
     const counts = new Map();
     while (hasMore && page<maxPages){
@@ -163,22 +169,21 @@ async function buildSpotlight(){
       <div class="contrib-card">
         <h4>Most Popular Blueprint</h4>
         <div class="contrib-title">${esc(mostPopular?.author ?? "—")}</div>
-        <div style="margin-top:8px">${esc(cleanTitle(mostPopular?.title ?? ""))}</div>
+        <div class="contrib-chip">${esc(cleanTitle(mostPopular?.title ?? "—"))}</div>
       </div>
       <div class="contrib-card">
         <h4>Most Uploaded Blueprints</h4>
         <div class="contrib-title">${esc(topAuthor)}</div>
-        <div class="contrib-chip">${k(topCount)} blueprint(s)</div>
+        <div class="contrib-chip">${k(topCount)} Blueprints</div>
       </div>
       <div class="contrib-card">
         <h4>Most Recent Upload</h4>
         <div class="contrib-title">${esc(mostRecent?.author ?? "—")}</div>
-        <div style="margin-top:8px">${esc(cleanTitle(mostRecent?.title ?? ""))}</div>
+        <div class="contrib-chip">${esc(cleanTitle(mostRecent?.title ?? "—"))}</div>
       </div>
     `;
-    host.style.display = "block";
   }catch{
-    // keep section hidden on failure
+    // keep skeleton if anything fails
   }
 }
 
@@ -247,23 +252,54 @@ function boot(){
     return url.toString();
   }
 
-  function matchesClientSide(it){ return matchesTokens(it, qTokens); }
-
-  async function load(first, myEpoch, accumulateAll=false){
+  async function loadInfinite(first, myEpoch){
     if (loading || (!hasMore && !first)) return;
     loading = true; clearError();
     try{
       const data = await fetchJSON(pageURL(page));
       if (myEpoch !== epoch) return;
-      const items = (data.items || []).filter(matchesClientSide);
+      const items = (data.items || []);
       if (first){ list.innerHTML = ""; empty.style.display = items.length ? "none" : "block"; }
       appendItems(list, items);
       hasMore = !!data.has_more;
       page += 1;
-      if (accumulateAll && hasMore) await load(false, myEpoch, true);
     }catch(e){
       if (myEpoch === epoch) setError(`Failed to load: ${String(e.message||e)}`);
     }finally{ loading = false; }
+  }
+
+  async function loadSearch(myEpoch){
+    // Accumulate everything, score & rank
+    list.innerHTML = "";
+    empty.style.display = "none";
+    clearError();
+
+    let p=0, more=true;
+    const all=[];
+    while (more){
+      const r = await fetchJSON(pageURL(p));
+      if (myEpoch !== epoch) return;
+      (r?.items||[]).forEach(it=>{
+        it.__score = scoreItem(it, qTokens);
+        if (it.__score>0) all.push(it);
+      });
+      more = !!r?.has_more; p++;
+    }
+
+    if (!all.length){
+      empty.style.display = "block";
+      return;
+    }
+
+    // Rank: score desc, then by sort choice as tiebreaker
+    all.sort((a,b)=>{
+      if (b.__score !== a.__score) return b.__score - a.__score;
+      if (sort==="likes") return (b.likes||0) - (a.likes||0);
+      if (sort==="title") return String(a.title||"").localeCompare(String(b.title||""));
+      return 0; // newest already via API pages, tie acceptable
+    });
+
+    appendItems(list, all);
   }
 
   async function loadAll(resetSpotlight=false){
@@ -273,12 +309,14 @@ function boot(){
 
     if (io) io.disconnect();
 
-    const wantAllNow = !!qTokens.length;
-    await load(true, myEpoch, wantAllNow);
-
-    if (!wantAllNow && sentinel){
-      io = new IntersectionObserver((e)=>{ if (e[0] && e[0].isIntersecting) load(false, myEpoch, false); }, {rootMargin:"700px"});
-      io.observe(sentinel);
+    if (qTokens.length){
+      await loadSearch(myEpoch);
+    }else{
+      await loadInfinite(true, myEpoch);
+      if (sentinel){
+        io = new IntersectionObserver((e)=>{ if (e[0] && e[0].isIntersecting) loadInfinite(false, myEpoch); }, {rootMargin:"700px"});
+        io.observe(sentinel);
+      }
     }
 
     if (resetSpotlight) buildSpotlight();
@@ -303,8 +341,8 @@ function boot(){
 
   fetchFilters();
   updateHeading({sort, bucket, q:qText});
-  buildSpotlight();      // show quickly
-  loadAll(false);        // load cards
+  buildSpotlight();      // visible immediately (skeleton -> data)
+  loadAll(false);        // cards
 }
 
 document.addEventListener("DOMContentLoaded", boot);
