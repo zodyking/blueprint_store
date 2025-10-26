@@ -1,8 +1,9 @@
-/* Blueprint Store – only the requested fixes:
- * - accurate Creators Spotlight
- * - robust search (epoch cancellation)
- * - keep single expandable description & likes pill
- * - dynamic heading
+/* Blueprint Store – requested fixes only:
+ * - restore Creators Spotlight (accurate)
+ * - search matches titles AND descriptions (client-side filter too)
+ * - keep single expanding description + likes pill
+ * - restore "View description" neutral button when multiple import badges exist
+ * - keep dynamic heading / tag filter / sort
  */
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
@@ -10,7 +11,7 @@ const $  = (s) => document.querySelector(s);
 /* helpers */
 const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 const sleep = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn, ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const debounce = (fn, ms=260)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
 async function fetchJSON(url, tries = 3) {
   let delay = 500;
@@ -28,7 +29,7 @@ async function fetchJSON(url, tries = 3) {
   }
 }
 
-/* number shortener + UI bits */
+/* number shortener */
 const k = n => { const x = Number(n||0); if (x>=1e6) return (x/1e6).toFixed(1).replace(/\.0$/,"")+"m"; if (x>=1e3) return (x/1e3).toFixed(1).replace(/\.0$/,"")+"k"; return String(x|0); };
 const likePill = likes => `<span class="likes-pill"><i class="heart" aria-hidden="true"></i><span>${k(likes)}</span><span>Liked This</span></span>`;
 
@@ -45,21 +46,26 @@ function cleanTitle(raw){
   return s;
 }
 
-/* cooked rewrite */
-function rewriteCooked(container){
+/* cooked rewrite (and count import badges) */
+function rewriteCookedAndCount(container){
+  let importCount = 0;
   container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    importCount++;
     a.classList.add("import-btn");
     a.innerHTML = `<sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>`;
   });
+  return importCount;
 }
 
-/* cache cooked HTML by topic id */
-const detailCache = new Map();
+/* cache cooked HTML + import badge count by topic id */
+const cookedCache = new Map(); // id -> {html, count}
 
 /* card renderer */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
+
+  const showNeutral = (it.import_count || 0) > 1;
 
   el.innerHTML = `
     <div class="row">
@@ -76,9 +82,11 @@ function renderCard(it){
 
     <div class="meta">${likePill(it.likes||0)}</div>
     <div class="card__footer">
-      <a class="import-btn" href="${esc(it.import_url)}" target="_blank" rel="noopener">
-        <sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>
-      </a>
+      ${showNeutral
+        ? `<a class="neutral-btn" data-viewdesc="${it.id}"><sl-icon name="file-text"></sl-icon><span>View description</span></a>`
+        : `<a class="import-btn" href="${esc(it.import_url)}" target="_blank" rel="noopener">
+             <sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>
+           </a>`}
     </div>
   `;
 
@@ -86,19 +94,19 @@ function renderCard(it){
   const tog  = wrap.querySelector(".toggle");
 
   async function expand(){
-    if (!detailCache.has(it.id)) {
+    if (!cookedCache.has(it.id)) {
       try{
         const data = await fetchJSON(`${API}/topic?id=${it.id}`);
         const tmp = document.createElement("div");
         tmp.innerHTML = data.cooked || "";
-        rewriteCooked(tmp);
-        detailCache.set(it.id, tmp.innerHTML);
+        const count = rewriteCookedAndCount(tmp);
+        cookedCache.set(it.id, { html: tmp.innerHTML, count });
       }catch(e){
-        detailCache.set(it.id, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
+        cookedCache.set(it.id, { html:`<em>Failed to load post: ${esc(String(e.message||e))}</em>`, count:0 });
       }
     }
     wrap.classList.remove("collapsed");
-    wrap.innerHTML = `<div class="desc" style="-webkit-line-clamp:unset; overflow:visible">${detailCache.get(it.id)}</div><div class="toggle">Less</div>`;
+    wrap.innerHTML = `<div class="desc" style="-webkit-line-clamp:unset; overflow:visible">${cookedCache.get(it.id).html}</div><div class="toggle">Less</div>`;
     wrap.querySelector(".toggle").addEventListener("click", collapse);
   }
   function collapse(){
@@ -107,6 +115,11 @@ function renderCard(it){
     wrap.querySelector(".toggle").addEventListener("click", expand);
   }
   tog.addEventListener("click", expand);
+
+  const viewBtn = el.querySelector(`[data-viewdesc="${it.id}"]`);
+  if (viewBtn){
+    viewBtn.addEventListener("click", (ev)=>{ ev.preventDefault(); expand(); });
+  }
 
   return el;
 }
@@ -117,13 +130,13 @@ async function buildSpotlightAccurate(){
   const host = $("#contrib"); const grid = $("#contribGrid");
   if (!host || !grid) return;
 
-  // most popular (likes) + most recent straight from first page
+  // most popular (likes) + most recent straight from first page of their sorts
   const mostLikedResp = await fetchJSON(`${API}/blueprints?page=0&sort=likes`);
   const mostRecentResp= await fetchJSON(`${API}/blueprints?page=0&sort=new`);
   const mostPopular = mostLikedResp?.items?.[0] || null;
   const mostRecent  = mostRecentResp?.items?.[0] || null;
 
-  // author with most uploads (scan all pages once)
+  // author with most uploads (scan all pages, once)
   let page=0, hasMore=true;
   const counts = new Map();
   while (hasMore){
@@ -131,8 +144,7 @@ async function buildSpotlightAccurate(){
     const items = r?.items||[];
     for(const it of items){ if(!it.author) continue; counts.set(it.author, (counts.get(it.author)||0)+1); }
     hasMore = !!r?.has_more; page++;
-    // tiny yield to keep UI responsive
-    await sleep(10);
+    await sleep(8);
   }
   let topAuthor=null, topCount=0;
   for (const [a,c] of counts){ if (c>topCount){ topAuthor=a; topCount=c; } }
@@ -167,7 +179,7 @@ function updateHeading({sort, bucket, q}) {
   h.textContent = parts.join(" • ");
 }
 
-/* boot + data plumbing (epoch to cancel stale loads) */
+/* boot + data plumbing */
 function boot(){
   const list   = $("#list");
   const empty  = $("#empty");
@@ -183,7 +195,7 @@ function boot(){
   if (!list) return;
 
   let page = 0;
-  let qTitle = "";
+  let qText = "";               // search (title or excerpt)
   let loading = false;
   let hasMore = true;
   let sort = "new";
@@ -215,55 +227,61 @@ function boot(){
   function pageURL(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
-    if (qTitle) url.searchParams.set("q_title", qTitle);
+    // server narrows by title; we still do client-side title+excerpt filter
+    if (qText) url.searchParams.set("q_title", qText);
     if (sort) url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
     return url.toString();
   }
 
-  async function load(first, myEpoch){
+  function matchesQuery(it){
+    if (!qText) return true;
+    const q = qText.toLowerCase();
+    return (it.title || "").toLowerCase().includes(q) || (it.excerpt || "").toLowerCase().includes(q);
+  }
+
+  async function load(first, myEpoch, accumulateAll=false){
     if (loading || (!hasMore && !first)) return;
     loading = true; clearError();
     try{
       const data = await fetchJSON(pageURL(page));
-      if (myEpoch !== epoch) return; // stale request
-      const items = data.items || [];
-      hasMore = !!data.has_more;
-
-      if (first){
-        list.innerHTML = "";
-        empty.style.display = items.length ? "none" : "block";
-      }
+      if (myEpoch !== epoch) return; // stale
+      const items = (data.items || []).filter(matchesQuery);
+      if (first){ list.innerHTML = ""; empty.style.display = items.length ? "none" : "block"; }
       appendItems(list, items);
+      hasMore = !!data.has_more;
       page += 1;
+
+      // when searching descriptions, we accumulate all pages in one go so results are complete
+      if (accumulateAll && hasMore) await load(false, myEpoch, true);
     }catch(e){
       if (myEpoch === epoch) setError(`Failed to load: ${String(e.message||e)}`);
-    }finally{
-      loading = false;
-    }
+    }finally{ loading = false; }
   }
 
   async function loadAll(resetSpotlight=false){
     epoch += 1; const myEpoch = epoch;
     page = 0; hasMore = true;
-    updateHeading({sort, bucket, q:qTitle});
+    updateHeading({sort, bucket, q:qText});
 
     // reset infinite scroll
     if (io) io.disconnect();
-    await load(true, myEpoch);
-    if (sentinel){
-      io = new IntersectionObserver((entries)=>{ if (entries[0]?.isIntersecting) load(false, myEpoch); }, {rootMargin:"700px"});
+
+    const wantAllNow = !!qText;   // when searching, scan all pages so excerpt matches are included
+    await load(true, myEpoch, wantAllNow);
+
+    if (!wantAllNow && sentinel){
+      io = new IntersectionObserver((entries)=>{ if (entries[0]?.isIntersecting) load(false, myEpoch, false); }, {rootMargin:"700px"});
       io.observe(sentinel);
     }
 
-    // spotlight is global (no filters). Only rebuild on manual refresh or very first boot.
     if (resetSpotlight) buildSpotlightAccurate();
   }
 
-  // search (epoch cancels stale loads)
+  // search (titles + descriptions)
   if (search){
     const onSearch = debounce(async ()=>{
-      qTitle = (search.value || "").trim();
+      qText = (search.value || "").trim();
       await loadAll(false);
     }, 260);
     search.addEventListener("sl-input", onSearch);
@@ -278,8 +296,8 @@ function boot(){
   }
 
   fetchFilters();
-  updateHeading({sort, bucket, q:qTitle});
-  buildSpotlightAccurate();       // once on boot (accurate)
+  updateHeading({sort, bucket, q:qText});
+  buildSpotlightAccurate();       // on boot
   loadAll(false);
 }
 
