@@ -1,10 +1,11 @@
 {
   "domain": "blueprint_browser",
   "name": "Blueprint Browser",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "documentation": "https://example.invalid/blueprint_browser",
   "issue_tracker": "https://example.invalid/blueprint_browser/issues",
   "iot_class": "cloud_polling",
+  "config_flow": true,
   "codeowners": ["@you"],
   "requirements": []
 }
