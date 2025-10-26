@@ -31,33 +31,17 @@ async function fetchJSON(url, tries=3){
   }
 }
 
-/* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
-function openExternal(url){
-  try{
-    const w = window.open("", "_blank");   // blank inherits our origin
-    if (w) {
-      try { w.opener = null; } catch {}
-      const safe = String(url).replace(/"/g, "&quot;");
-      // lightweight fallback content
-      w.document.write(`<!doctype html><meta charset="utf-8">
-        <title>Opening…</title>
-        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
-        a{color:#06c;font-weight:700}</style>
-        <p>Opening forum… If nothing happens <a href="${safe}">click here</a>.</p>
-        <meta http-equiv="refresh" content="0; url='${safe}'">`);
-      try { w.location.href = url; } catch {}
-      return true;
-    }
-  } catch {}
-  // ultimate fallback – same tab
-  try { window.top.location.assign(url); } catch { location.assign(url); }
-  return false;
+/* ----- top-window navigation (most reliable from sandboxed panel) ----- */
+function navigateTop(url){
+  try { window.top.location.assign(url); }
+  catch { location.assign(url); }
 }
 
 /* pill buttons */
 function importButton(href){
+  const safe = esc(href);
   return `
-    <a class="myha-btn" data-open="${esc(href)}">
+    <a class="myha-btn" href="${safe}" title="Open (Ctrl/Cmd+Click for new tab)">
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
@@ -69,14 +53,9 @@ function viewDescButton(){
       View description
     </button>`;
 }
-function forumButtonRedirect(tid, slug){
+function forumButtonHref(tid, slug){
   const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
-  const href = `${API}/go?${qs}`;
-  return `
-    <a class="myha-btn secondary" data-open="${esc(href)}">
-      <sl-icon name="box-arrow-up-right"></sl-icon>
-      Forum post
-    </a>`;
+  return `${API}/go?${qs}`;
 }
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
@@ -96,7 +75,6 @@ function rewriteToRedirect(href){
   try{
     const u = new URL(href);
     if (u.hostname !== "community.home-assistant.io") return null;
-    // Discourse topic URLs are /t/<slug>/<id> or /t/<id>
     const parts = u.pathname.split("/").filter(Boolean);
     const idx = parts.indexOf("t");
     if (idx === -1) return null;
@@ -122,23 +100,27 @@ function setPostHTML(container, html){
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
     pill.className = "myha-btn myha-inline-import";
-    pill.setAttribute("data-open", href);
-    pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
+    pill.href = href;
+    pill.title = "Open (Ctrl/Cmd+Click for new tab)";
     a.replaceWith(pill);
   });
 
-  // Rewrite forum-topic links to same-origin redirect + add data-open
+  // Rewrite forum-topic links to same-origin redirect
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
     const redir = rewriteToRedirect(a.getAttribute("href"));
-    if (redir) a.setAttribute("data-open", redir);
+    if (redir) a.setAttribute("href", redir);
   });
 
-  // intercept clicks on any data-open inside description
+  // intercept clicks inside description: navigate the top window
   tmp.addEventListener("click", (ev)=>{
-    const a = ev.target.closest("[data-open]");
+    const a = ev.target.closest("a[href]");
     if (!a) return;
+    // allow Ctrl/Cmd click to open in new tab
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return;
+    const href = a.getAttribute("href");
+    if (!href) return;
     ev.preventDefault();
-    openExternal(a.getAttribute("data-open"));
+    navigateTop(href);
   });
 
   container.innerHTML = "";
@@ -154,6 +136,7 @@ function renderCard(it){
   el.className = "card";
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
+  const forumHref = forumButtonHref(it.id, it.slug || "");
 
   el.innerHTML = `
     <div class="row">
@@ -168,7 +151,10 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButtonRedirect(it.id, it.slug || "")}
+      <a class="myha-btn secondary" href="${esc(forumHref)}" title="Open (Ctrl/Cmd+Click for new tab)">
+        <sl-icon name="box-arrow-up-right"></sl-icon>
+        Forum post
+      </a>
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -206,12 +192,15 @@ function renderCard(it){
     }
   });
 
-  // Intercept open buttons on the card footer
-  el.addEventListener("click", (ev)=>{
-    const opener = ev.target.closest("[data-open]");
-    if (!opener) return;
-    ev.preventDefault();
-    openExternal(opener.getAttribute("data-open"));
+  // Intercept normal clicks on footer links to navigate top window
+  el.querySelectorAll(".card__footer a[href]").forEach(a=>{
+    a.addEventListener("click", (ev)=>{
+      if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // allow new-tab gestures
+      const href = a.getAttribute("href");
+      if (!href) return;
+      ev.preventDefault();
+      navigateTop(href);
+    });
   });
 
   const viewBtn = el.querySelector('button[data-viewdesc="1"]');
