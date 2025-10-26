@@ -5,13 +5,13 @@
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Shoelace (Web Components) -->
+    <!-- Shoelace -->
     <script
       type="module"
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (reserved; no heavy usage right now) -->
+    <!-- Material Web (minimal use) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
@@ -26,8 +26,7 @@
         --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1200px;
 
-        /* Shoelace controls */
-        --sl-input-background-color: transparent; /* transparent search */
+        --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
         --sl-panel-background-color: rgba(16,34,86,.98);
@@ -48,19 +47,18 @@
         background-size: 28px 28px;
       }
 
-      /* Header */
       header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
       .bar{
         max-width:var(--maxw); margin:0 auto; padding:8px 12px;
-        display:grid; grid-template-columns:auto 1fr auto auto; gap:10px; align-items:center;
+        display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center;
       }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
+
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
       sl-input::part(form-control-label){ color:#fff; }
 
-      /* plain top-menu button (no outline) */
       sl-button.plain::part(base){
         background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
       }
@@ -68,11 +66,9 @@
 
       main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
 
-      /* Banner */
       .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
 
-      /* Glow track */
       .cards-wrap{ position:relative; }
       .cards-wrap::before{
         content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
@@ -83,7 +79,6 @@
 
       .section-title{ margin:8px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
 
-      /* Card */
       .card{
         border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
         box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
@@ -98,7 +93,6 @@
       .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
       .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
 
-      /* My Home Assistant–style pill buttons */
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
         display:inline-flex; align-items:center; gap:8px;
@@ -109,25 +103,22 @@
         border: 1px solid rgba(255,255,255,.35);
       }
       .myha-btn:active{ transform: translateY(1px); }
-      .myha-btn.secondary{
-        --grad-a:#1b2a6b; --grad-b:#2c57b8;  /* darker, still elegant */
-        color:#eaf4ff;
-      }
+      .myha-btn.secondary{ --grad-a:#1b2a6b; --grad-b:#2c57b8; color:#eaf4ff; }
 
-      /* Read-more block */
       .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
       .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
       .more :where(h1,h2,h3){ font-weight:800; }
       .more img{ max-width:100%; height:auto; border-radius:8px; }
       .more a{ color:#aee1ff; }
       .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
+      /* normalize any huge inline import banners into compact pills */
+      .more a.myha-inline-import{ display:inline-flex; }
 
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
     </style>
   </head>
   <body>
-    <!-- Sticky top bar -->
     <header>
       <div class="bar">
         <div class="brand">
@@ -145,7 +136,12 @@
           <sl-option value="uses">Most used</sl-option>
         </sl-select>
 
-        <!-- Plain menu action -->
+        <!-- Tags dropdown (populated by JS) -->
+        <sl-dropdown id="tagdd" hoist>
+          <sl-button id="tagbtn" slot="trigger" caret class="plain" pill>All tags</sl-button>
+          <sl-menu id="tagmenu"></sl-menu>
+        </sl-dropdown>
+
         <sl-button id="refresh" class="plain" pill>Refresh</sl-button>
       </div>
     </header>
@@ -161,7 +157,6 @@
       <div id="sentinel"></div>
     </main>
 
-    <!-- IMPORTANT: no top-level await; load deferred -->
     <script src="./app.js" defer></script>
   </body>
 </html>
