@@ -1,9 +1,4 @@
-/* Blueprint Store – stable sort + spinner + lighter bg
-   Only requested changes:
-   - spinner while Creators Spotlight loads
-   - slightly lighter blueprint background (tweak is in CSS)
-   - hardened sort dropdown (Most liked / Newest / Title A–Z)
-*/
+/* Blueprint Store – spotlight from ALL pages + dblclick toggle + stable sort */
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
 
@@ -34,31 +29,25 @@ async function fetchJSON(url, tries=3){
   }
 }
 
-/* -------- title normalizer (unchanged behaviour you liked) -------- */
+/* -------- title normalizer -------- */
 function normalizeTokenCase(word){
-  if (word.length <= 2) return word.toUpperCase(); // e.g. ZH, AI
-  if (/^[A-Z0-9]{3,}$/.test(word)) return word;   // keep full caps acronyms
+  if (word.length <= 2) return word.toUpperCase();
+  if (/^[A-Z0-9]{3,}$/.test(word)) return word;
   return word[0].toUpperCase() + word.slice(1).toLowerCase();
 }
 function formatTitle(s){
   if (!s) return "";
-  // remove “[Blueprint]” and any leading emojis/specials (keep parentheses)
   let t = s.replace(/\[blueprint\]\s*/i, "")
            .replace(/^[\s\p{Emoji_Presentation}\p{Extended_Pictographic}]+/gu, "")
-           .replace(/[^\p{L}\p{N}\s()\-:_&,'\/]/gu, " "); // keep a few safe chars
-  // collapse whitespace
+           .replace(/[^\p{L}\p{N}\s()\-:_&,'\/]/gu, " ");
   t = t.replace(/\s+/g," ").trim();
-
-  // Title Case (preserve known caps)
   t = t.split(" ").map(normalizeTokenCase).join(" ");
-  // small fix: “Of, And, The” inside get lowercase unless first
   t = t.replace(/\b(And|Or|Of|The|In|With|For|On|To)\b/g, m=>m.toLowerCase());
-  // keep acronym examples
   t = t.replace(/\b(ZHA|Z2M|MQTT|RGB|ESP32|Zigbee2MQTT)\b/g, m=>m);
   return t;
 }
 
-/* ----- resilient opener (unchanged) ----- */
+/* ----- opener ----- */
 function openExternal(url){
   try{
     const w = window.open("", "_blank");
@@ -79,7 +68,7 @@ function openExternal(url){
   return false;
 }
 
-/* pill buttons */
+/* pills */
 function importButton(href){
   return `
     <a class="myha-btn" data-open="${esc(href)}">
@@ -113,7 +102,7 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* -------- normalize post HTML & CTA conversion + redirect ------ */
+/* -------- rewrite helpers ------ */
 function rewriteToRedirect(href){
   try{
     const u = new URL(href);
@@ -138,7 +127,6 @@ function setPostHTML(container, html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // transform big MY import banners -> compact pill link
   tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
@@ -148,13 +136,11 @@ function setPostHTML(container, html){
     a.replaceWith(pill);
   });
 
-  // rewrite topic links via same-origin redirect
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
     const redir = rewriteToRedirect(a.getAttribute("href"));
     if (redir) a.setAttribute("data-open", redir);
   });
 
-  // intercept any pill click
   tmp.addEventListener("click", (ev)=>{
     const a = ev.target.closest("[data-open]");
     if (!a) return;
@@ -200,8 +186,6 @@ function renderCard(it){
     </div>
   `;
 
-  // CTA: if the forum post contains more than one import banner,
-  // change CTA to "View description".
   const ctaSpan = el.querySelector(`#cta-${it.id}`);
   const defaultCTA = importButton(it.import_url);
   ctaSpan.innerHTML = defaultCTA;
@@ -219,10 +203,8 @@ function renderCard(it){
   }
   ensureCTAFromPost();
 
-  // Read more / less
   const toggle = el.querySelector(".toggle");
   const more = el.querySelector(`#more-${it.id}`);
-  const desc = el.querySelector(`#desc-${it.id}`);
   let expanded = false;
 
   async function expandNow(){
@@ -243,15 +225,20 @@ function renderCard(it){
     more.style.display = "block";
     toggle.textContent = "Less";
   }
+  function collapseNow(){
+    expanded = false;
+    more.style.display = "none";
+    toggle.textContent = "Read more";
+  }
 
   toggle.addEventListener("click", async () => {
-    if (expanded) {
-      expanded = false;
-      more.style.display = "none";
-      toggle.textContent = "Read more";
-    } else {
-      await expandNow();
-    }
+    if (expanded) { collapseNow(); } else { await expandNow(); }
+  });
+
+  // NEW: double-click anywhere on the card (except links/buttons) toggles
+  el.addEventListener("dblclick", async (ev)=>{
+    if (ev.target.closest("a,button,[data-open]")) return;
+    if (expanded) { collapseNow(); } else { await expandNow(); }
   });
 
   el.addEventListener("click", (ev)=>{
@@ -273,55 +260,70 @@ function appendItems(target, items){
 }
 
 /* --------------------- Creators Spotlight --------------------- */
-async function buildSpotlight(allItems){
+async function fetchAllBlueprintsForSpotlight(){
+  // Fetch ALL pages (no q/bucket) so spotlight is accurate
+  let p = 0; const all = [];
+  while (true){
+    const url = new URL(`${API}/blueprints`, location.origin);
+    url.searchParams.set("page", String(p));
+    const data = await fetchJSON(url.toString());
+    all.push(...(data.items || []));
+    if (!data.has_more) break;
+    p += 1;
+  }
+  return all;
+}
+function tsFor(it){
+  return new Date(
+    it.created_at || it.created || it.updated_at || it.updated || 0
+  ).getTime() || (Number(it.id) || 0);
+}
+async function buildSpotlightAll(){
   const grid = $("#cs-grid");
   const loading = $("#cs-loading");
+  if (!grid || !loading) return;
+
   grid.style.display = "none";
   loading.style.display = "flex";
 
-  // compute using current batch
-  // Most popular blueprint = highest likes
-  const byLikes = [...allItems].sort((a,b)=> (b.likes||0)-(a.likes||0));
-  const mostPopular = byLikes[0];
+  try{
+    const items = await fetchAllBlueprintsForSpotlight();
 
-  // Most uploaded blueprints = max count by author
-  const byAuthor = {};
-  for (const x of allItems) {
-    if (!x.author) continue;
-    byAuthor[x.author] = (byAuthor[x.author]||0)+1;
+    const byLikes = [...items].sort((a,b)=> (b.likes||0)-(a.likes||0));
+    const mostPopular = byLikes[0];
+
+    const byAuthor = {};
+    for (const x of items) if (x.author) byAuthor[x.author] = (byAuthor[x.author]||0)+1;
+    const topAuthor = Object.entries(byAuthor).sort((a,b)=>b[1]-a[1])[0] || ["",0];
+
+    const byRecent = [...items].sort((a,b)=> tsFor(b)-tsFor(a));
+    const mostRecent = byRecent[0];
+
+    const card = (title, author, line)=>{
+      return `<div class="contrib-card">
+        <h4>${esc(title)}</h4>
+        <div class="contrib-author">${esc(author || "—")}</div>
+        <div>${line||""}</div>
+      </div>`;
+    };
+
+    grid.innerHTML = `
+      ${card("Most Popular Blueprint",
+             mostPopular?.author,
+             mostPopular ? esc(formatTitle(mostPopular.title)) : "—")}
+      ${card("Most Uploaded Blueprints",
+             topAuthor?.[0] || "—",
+             `${topAuthor?.[1] || 0} Blueprints`)}
+      ${card("Most Recent Upload",
+             mostRecent?.author,
+             mostRecent ? esc(formatTitle(mostRecent.title)) : "—")}
+    `;
+  }catch(e){
+    grid.innerHTML = `<div class="contrib-card"><strong>Creators Spotlight</strong><br>${esc(String(e.message||e))}</div>`;
+  }finally{
+    loading.style.display = "none";
+    grid.style.display = "grid";
   }
-  const topAuthor = Object.entries(byAuthor).sort((a,b)=>b[1]-a[1])[0] || ["",0];
-
-  // Most recent upload (by created or updated timestamp if available)
-  const byRecent = [...allItems].sort((a,b)=>{
-    const ad = new Date(a.created_at || a.updated_at || 0).getTime();
-    const bd = new Date(b.created_at || b.updated_at || 0).getTime();
-    return bd - ad;
-  });
-  const mostRecent = byRecent[0];
-
-  const card = (title, author, line)=>{
-    return `<div class="contrib-card">
-      <h4>${esc(title)}</h4>
-      <div class="contrib-author">${esc(author || "—")}</div>
-      <div>${line||""}</div>
-    </div>`;
-  };
-
-  grid.innerHTML = `
-    ${card("Most Popular Blueprint",
-           mostPopular?.author,
-           mostPopular ? esc(formatTitle(mostPopular.title)) : "—")}
-    ${card("Most Uploaded Blueprints",
-           topAuthor?.[0] || "—",
-           `${topAuthor?.[1] || 0} Blueprints`)}
-    ${card("Most Recent Upload",
-           mostRecent?.author,
-           mostRecent ? esc(formatTitle(mostRecent.title)) : "—")}
-  `;
-
-  loading.style.display = "none";
-  grid.style.display = "grid";
 }
 
 /* --------------------- boot & data flow --------------------- */
@@ -348,7 +350,6 @@ function boot(){
   let sort = "likes";   // likes | new | title
   let bucket = "";
 
-  // stable apply-sort guard
   let applyingSort = false;
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
@@ -359,7 +360,6 @@ function boot(){
     if (sort === "likes") bits.push("Most liked blueprints");
     else if (sort === "new") bits.push("Newest blueprints");
     else bits.push("Title A–Z");
-
     if (qText) bits.push(`• query: “${qText}”`);
     if (bucket) bits.push(`• tag: ${bucket}`);
     heading.textContent = bits.join(" ");
@@ -385,14 +385,11 @@ function boot(){
   async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
-    if (qText) url.searchParams.set("q", qText);          // server can soft-filter
+    if (qText) url.searchParams.set("q", qText);
     if (sort) url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
     return await fetchJSON(url.toString());
   }
-
-  // maintain a rolling set of items for spotlight & client search ranking
-  const allItemsSoFar = [];
 
   async function load(initial=false){
     if (loading || (!hasMore && !initial)) return;
@@ -402,10 +399,6 @@ function boot(){
       const items = data.items || [];
       hasMore = !!data.has_more;
 
-      // keep a rolling list for spotlight
-      allItemsSoFar.push(...items);
-
-      // client-side word matching keeps "great search" you liked
       const terms = (qText||"").toLowerCase().split(/\s+/).filter(Boolean);
       let out = items;
       if (terms.length){
@@ -413,7 +406,7 @@ function boot(){
           const hay = `${it.title||""} ${it.excerpt||""} ${(it.tags||[]).join(" ")}`.toLowerCase();
           let score = 0;
           for (const t of terms){
-            if (hay.includes(t)) score += 3;          // title/desc hit
+            if (hay.includes(t)) score += 3;
             if ((it.tags||[]).some(x=>String(x).toLowerCase().includes(t))) score += 2;
           }
           return {it, score};
@@ -422,16 +415,12 @@ function boot(){
           .map(x=>x.it);
       }
 
-      // render
       if (initial){
         list.innerHTML = "";
         if (empty) empty.style.display = out.length ? "none" : "block";
       }
       appendItems(list, out);
       page += 1;
-
-      // after first couple pages come in, build spotlight (spinner shows meanwhile)
-      if (page === 2) buildSpotlight(allItemsSoFar);
     }catch(e){
       setError(`Failed to load: ${String(e.message||e)}`);
     }finally{
@@ -441,11 +430,7 @@ function boot(){
 
   async function loadAllForSearch(){
     page = 0; hasMore = true; list.innerHTML = ""; clearError();
-    allItemsSoFar.length = 0;
     updateHeading();
-    // reset spotlight spinner
-    const grid = $("#cs-grid"); const loadingBox = $("#cs-loading");
-    if (grid && loadingBox){ grid.style.display="none"; loadingBox.style.display="flex"; }
     await load(true);
   }
 
@@ -459,14 +444,12 @@ function boot(){
   }
 
   if (sortSel){
-    // make sure the dropdown always reflects the active sort and applies exactly once
     sortSel.addEventListener("sl-change", async () => {
       if (applyingSort) return;
       applyingSort = true;
       try{
         const v = sortSel.value || "likes";
         if (v !== sort){ sort = v; }
-        // keep the control in sync explicitly
         sortSel.value = sort;
         await loadAllForSearch();
       }finally{
@@ -489,6 +472,9 @@ function boot(){
   fetchFilters();
   updateHeading();
   load(true);
+
+  // Build spotlight from ALL pages (spinner shows until done)
+  buildSpotlightAll();
 }
 
 document.addEventListener("DOMContentLoaded", boot);
