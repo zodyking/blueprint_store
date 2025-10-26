@@ -1,9 +1,15 @@
 const API = "/api/blueprint_store";
 const $ = (s) => document.querySelector(s);
 
-function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
+/* ---------- helpers ---------- */
+function esc(s){
+  return (s||"").replace(/[&<>"']/g, c=>({
+    "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"
+  }[c]));
+}
 const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
+/* pill buttons */
 function importButton(href){
   return `
     <a class="myha-btn" href="${href}" target="_blank" rel="noopener">
@@ -19,6 +25,8 @@ function forumButton(href){
     </a>`;
 }
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
+
+/* tags renderer (no blanks/dupes) */
 function tagPills(tags){
   const set = [];
   (tags || []).forEach(t => {
@@ -28,6 +36,8 @@ function tagPills(tags){
   if (!set.length) return "";
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
+
+/* full post renderer */
 function setPostHTML(container, html){
   container.innerHTML = html || "<em>Nothing to show.</em>";
   container.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
@@ -41,10 +51,12 @@ async function fetchJSON(url){
   return data;
 }
 
+/* ---------- card ---------- */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
+
   el.innerHTML = `
     <div class="row">
       <h3>${esc(it.title)}</h3>
@@ -53,37 +65,44 @@ function renderCard(it){
     </div>
     ${tagPills(visibleTags)}
     <p class="desc">${esc(it.excerpt || "")}</p>
+
     <div class="toggle" data-id="${it.id}">Read more</div>
     <div class="more" id="more-${it.id}"></div>
+
     <div class="card__footer">
       ${forumButton(it.topic_url)}
       ${importButton(it.import_url)}
     </div>
   `;
+
+  // Read more / less
   const toggle = el.querySelector(".toggle");
   const more = el.querySelector(`#more-${it.id}`);
   let expanded = false, loaded = false;
   toggle.addEventListener("click", async () => {
     expanded = !expanded;
     if (expanded && !loaded) {
-      try {
+      try{
         const data = await fetchJSON(`${API}/topic?id=${it.id}`);
         setPostHTML(more, data.cooked || "");
         loaded = true;
-      } catch (e) {
+      }catch(e){
         setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
       }
     }
     more.style.display = expanded ? "block" : "none";
     toggle.textContent = expanded ? "Less" : "Read more";
   });
+
   return el;
 }
 
-function appendItems(target, items){ for (const it of items) target.appendChild(renderCard(it)); }
+function appendItems(target, items){
+  for (const it of items) target.appendChild(renderCard(it));
+}
 
+/* ---------- boot ---------- */
 function boot(){
-  // Grab DOM nodes safely
   const list   = $("#list");
   const empty  = $("#empty");
   const errorB = $("#error");
@@ -92,7 +111,7 @@ function boot(){
   const refreshBtn = $("#refresh");
   const sentinel = $("#sentinel");
 
-  if (!list) return; // nothing to do if panel DOM failed to load
+  if (!list) return;
 
   // State
   let page = 0;
@@ -141,7 +160,7 @@ function boot(){
     }
   }
 
-  // Handlers
+  // Events
   if (search){
     const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); await loadAllForSearch(); }, 280);
     search.addEventListener("sl-input", onSearch);
@@ -154,7 +173,7 @@ function boot(){
     refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
   }
 
-  // Infinite scroll (guard sentinel)
+  // Infinite scroll
   if (sentinel){
     const io = new IntersectionObserver((entries)=>{
       if (entries[0] && entries[0].isIntersecting) load(false);
@@ -162,9 +181,8 @@ function boot(){
     io.observe(sentinel);
   }
 
-  // Initial load
+  // Kickoff
   load(true);
 }
 
-// Start after DOM is parsed (script is deferred)
 document.addEventListener("DOMContentLoaded", boot);
