@@ -16,7 +16,6 @@ async function fetchJSONRaw(url){
   if (data && data.error) throw new Error(data.error);
   return data;
 }
-// retry/backoff for 429
 async function fetchJSON(url, tries=3){
   let delay = 600;
   for(let i=0;i<tries;i++){
@@ -25,8 +24,7 @@ async function fetchJSON(url, tries=3){
       const msg = String(e.message||e);
       if (i < tries-1 && /429/.test(msg)) {
         await new Promise(r=>setTimeout(r, delay + Math.random()*250));
-        delay *= 2;
-        continue;
+        delay *= 2; continue;
       }
       throw e;
     }
@@ -70,12 +68,33 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* normalize post HTML */
+/* -------- normalize post HTML & rewrite forum links via redirect ------ */
+function rewriteToRedirect(href){
+  try{
+    const u = new URL(href);
+    if (u.hostname !== "community.home-assistant.io") return null;
+    // Discourse topic URLs are /t/<slug>/<id> or /t/<id>
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("t");
+    if (idx === -1) return null;
+    let slug = "", id = "";
+    if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) {
+      id = parts[idx+1];
+    } else {
+      slug = (parts[idx+1] || "");
+      id = (parts[idx+2] || "").replace(/[^0-9]/g, "");
+    }
+    if (!id) return null;
+    const qs = new URLSearchParams({ tid: id, slug }).toString();
+    return `${API}/go?${qs}`;
+  }catch{ return null; }
+}
+
 function setPostHTML(container, html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // compact MyHA banners
+  // Convert big MyHA banners to compact pill
   tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
@@ -87,6 +106,13 @@ function setPostHTML(container, html){
     a.replaceWith(pill);
   });
 
+  // Rewrite forum-topic links to same-origin redirect
+  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
+    const redir = rewriteToRedirect(a.getAttribute("href"));
+    if (redir) a.setAttribute("href", redir);
+  });
+
+  // external links open new tab
   tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
 
   container.innerHTML = "";
