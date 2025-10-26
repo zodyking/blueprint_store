@@ -2,121 +2,58 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Blueprint Store</title>
+    <title>Blueprint Browser</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <!-- Shoelace -->
-    <script type="module"
-      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
-    </script>
-    <!-- Minimal Material Web import used by tag chips if needed -->
-    <script type="module">
-      import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
-    </script>
-
     <style>
-      :root{
-        --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
-        --card-bd: rgba(170,200,255,.22);
-        --card-bd-hover:#9dd1ff66;
-        --shadow: 0 18px 50px rgba(6,16,50,.45);
-        --maxw: 1200px;
-        --sl-input-background-color: transparent;
-        --sl-input-border-color: rgba(255,255,255,.32);
-        --sl-color-neutral-0: rgba(16,34,86,.98);
-        --sl-panel-background-color: rgba(16,34,86,.98);
+      :root { --pad: 16px; --radius: 12px; --muted: #6b7280; --bg: #0b0b0b0a; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell;
+             margin: 0; color: var(--text, #111); background: #fff; }
+      header { position: sticky; top: 0; background: #fff; padding: var(--pad);
+               border-bottom: 1px solid #eee; z-index: 10; }
+      .row { display: flex; gap: 12px; align-items: center; }
+      input[type="search"] {
+        flex: 1; font-size: 16px; padding: 10px 12px; border: 1px solid #ddd;
+        border-radius: 10px; outline: none;
       }
-      * { box-sizing: border-box; }
-      body{ margin:0; color:var(--ink); font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu,Arial;
-            background: linear-gradient(180deg, var(--blue-1), var(--blue-2)); min-height:100vh; }
-      body::after{ content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
-                   background-image:linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
-                                    linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
-                   background-size: 28px 28px; }
-      header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
-      .bar{ max-width:var(--maxw); margin:0 auto; padding:8px 12px;
-            display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center; }
-      .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
-      .brand img{ width:28px; height:28px; border-radius:6px; }
-
-      sl-input::part(base){ background:transparent; }
-      sl-input::part(input){ color:#fff; }
-      sl-button.plain::part(base){ background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px; }
-      sl-button.plain::part(base):hover{ text-decoration: underline; }
-
-      main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
-      .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
-      .banner img{ width:100%; display:block; }
-      .cards-wrap{ position:relative; }
-      .cards-wrap::before{ content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
-                           background: radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.18), transparent 60%),
-                                       radial-gradient(60% 60% at 50% 100%, rgba(40,140,255,.18), transparent 65%);
-                           filter: blur(18px); }
-      .section-title{ margin:8px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
-      .card{ border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
-             box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden; }
-      .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
-      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
-      .card h3{ margin:0; font-size:18px; font-weight:900; }
-      .author{ opacity:.92; font-weight:700; }
-      .desc{ color:var(--muted); margin:8px 0 8px; line-height:1.55; }
-      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
-      .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
-      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
-      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
-      .myha-btn{ --grad-a:#00b2ff; --grad-b:#0a84ff; display:inline-flex; align-items:center; gap:8px;
-                 padding:10px 14px; border-radius:999px; font-weight:800; color:#032149; text-decoration:none;
-                 background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
-                 box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
-                 border: 1px solid rgba(255,255,255,.35); }
-      .myha-btn.secondary{ --grad-a:#1b2a6b; --grad-b:#2c57b8; color:#eaf4ff; }
-      .myha-btn.neutral{ --grad-a:#6d7a92; --grad-b:#4e5a74; color:#f6f8ff; }
-      .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
-      .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
-      #error, #empty{ text-align:center; color:#e7eefc; }
-      #sentinel{ height:60px; }
+      button {
+        border: 1px solid #ddd; background: #fafafa; padding: 10px 14px;
+        border-radius: 10px; cursor: pointer;
+      }
+      main { padding: var(--pad); }
+      .card {
+        background: #fff; border: 1px solid #eee; border-radius: var(--radius);
+        padding: 14px; margin-bottom: 12px;
+      }
+      .title { font-weight: 600; font-size: 16px; margin: 0 0 6px; }
+      .excerpt { color: var(--muted); font-size: 14px; margin: 0; }
+      .meta { display: flex; gap: 10px; margin-top: 8px; }
+      .link { text-decoration: none; color: #2563eb; }
+      #detail { display: none; padding: var(--pad); }
+      .back { margin-bottom: 8px; }
+      .btn-primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+      .empty { text-align: center; color: var(--muted); padding: 24px; }
     </style>
   </head>
   <body>
     <header>
-      <div class="bar">
-        <div class="brand">
-          <img src="/blueprint_store_static/images/bps_logo.png" alt="Blueprint Store"/>
-          <span>Blueprint Store</span>
-        </div>
-
-        <sl-input id="search" placeholder="Search titles (finds every match)..." clearable pill>
-          <sl-icon name="search" slot="prefix"></sl-icon>
-        </sl-input>
-
-        <sl-select id="sort" value="new" hoist>
-          <sl-option value="new">Newest</sl-option>
-          <sl-option value="title">Title A–Z</sl-option>
-          <sl-option value="likes">Most liked</sl-option>
-        </sl-select>
-
-        <sl-dropdown id="tagdd" hoist>
-          <sl-button id="tagbtn" slot="trigger" caret class="plain" pill>All tags</sl-button>
-          <sl-menu id="tagmenu"></sl-menu>
-        </sl-dropdown>
-
-        <sl-button id="refresh" class="plain" pill>Refresh</sl-button>
+      <div class="row">
+        <input id="search" type="search" placeholder="Search blueprints…" />
+        <button id="refresh" title="Refresh list">Refresh</button>
       </div>
     </header>
 
-    <main>
-      <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
+    <main id="list"></main>
 
-      <div class="section-title">All blueprints</div>
-      <div id="list" class="cards-wrap"></div>
+    <section id="detail">
+      <button class="back" onclick="showList()">← Back</button>
+      <h2 id="d-title"></h2>
+      <p id="d-excerpt" class="excerpt"></p>
+      <div class="meta">
+        <a id="d-topic" class="link" target="_blank" rel="noopener">Open forum post</a>
+        <a id="d-import" class="link btn-primary" target="_blank" rel="noopener">Import to my Home Assistant</a>
+      </div>
+    </section>
 
-      <p id="empty" style="display:none">No blueprints matched.</p>
-      <p id="error" style="display:none"></p>
-      <div id="sentinel"></div>
-    </main>
-
-    <!-- IMPORTANT: absolute path to our served JS -->
-    <script src="/blueprint_store/app.js?v=restore-load" defer></script>
+    <script src="./app.js"></script>
   </body>
 </html>
