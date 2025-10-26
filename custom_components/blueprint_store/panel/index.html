@@ -92,7 +92,6 @@
       .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
       .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
 
-      /* My Home Assistant pill buttons */
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
         display:inline-flex; align-items:center; gap:8px;
@@ -104,7 +103,7 @@
       }
       .myha-btn:active{ transform: translateY(1px); }
       .myha-btn.secondary{ --grad-a:#1b2a6b; --grad-b:#2c57b8; color:#eaf4ff; }
-      .myha-btn.neutral{ --grad-a:#6d7a92; --grad-b:#4e5a74; color:#f6f8ff; } /* gray for "View description" */
+      .myha-btn.neutral{ --grad-a:#6d7a92; --grad-b:#4e5a74; color:#f6f8ff; }
 
       .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
       .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
@@ -112,7 +111,6 @@
       .more img{ max-width:100%; height:auto; border-radius:8px; }
       .more a{ color:#aee1ff; }
       .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
-      .more a.myha-inline-import{ display:inline-flex; }
 
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
@@ -136,7 +134,6 @@
           <sl-option value="likes">Most liked</sl-option>
         </sl-select>
 
-        <!-- Tags dropdown (populated by JS) -->
         <sl-dropdown id="tagdd" hoist>
           <sl-button id="tagbtn" slot="trigger" caret class="plain" pill>All tags</sl-button>
           <sl-menu id="tagmenu"></sl-menu>
@@ -157,6 +154,7 @@
       <div id="sentinel"></div>
     </main>
 
-    <script src="./app.js" defer></script>
+    <!-- cache-busted -->
+    <script src="./app.js?v=bs-redirect-2" defer></script>
   </body>
 </html>
