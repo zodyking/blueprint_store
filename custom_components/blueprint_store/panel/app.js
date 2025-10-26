@@ -48,7 +48,6 @@ function openExternal(url){
       return true;
     }
   } catch {}
-  // ultimate fallback – same tab
   try { window.top.location.assign(url); } catch { location.assign(url); }
   return false;
 }
@@ -69,7 +68,7 @@ function viewDescButton(){
     </button>`;
 }
 
-/* NEW: stats pill (replaces old forum button) */
+/* stats pill (Likes + Comments) */
 function statsPill(likes, replies){
   const l = Number(likes ?? 0);
   const r = Number(replies ?? 0);
@@ -157,9 +156,21 @@ function renderCard(it){
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
 
-  // derive stats with fallbacks
-  const likes   = it.likes ?? it.like_count ?? 0;
-  const replies = it.replies ?? it.comments ?? ((it.posts_count || 1) - 1);
+  /* >>> FIX HERE: robust replies derivation <<< */
+  const likes =
+    it.likes ??
+    it.like_count ??
+    0;
+
+  const repliesRaw = [
+    it.replies,
+    it.reply_count,                   // Discourse topic-list field
+    (it.posts_count != null ? Number(it.posts_count) - 1 : null),
+    it.comments
+  ].find(v => v != null && !Number.isNaN(Number(v)));
+
+  const replies = Math.max(0, Number(repliesRaw ?? 0));
+  /* >>> END FIX <<< */
 
   el.innerHTML = `
     <div class="row">
@@ -212,7 +223,7 @@ function renderCard(it){
     }
   });
 
-  // Intercept open buttons on the card footer (import + any in-description pills)
+  // Intercept open buttons on the card footer
   el.addEventListener("click", (ev)=>{
     const opener = ev.target.closest("[data-open]");
     if (!opener) return;
