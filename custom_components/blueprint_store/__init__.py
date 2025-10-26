@@ -25,6 +25,7 @@ from .const import (
     PANEL_URL,
     SIDEBAR_TITLE,
     SIDEBAR_ICON,
+    CURATED_BUCKETS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -47,7 +48,7 @@ def _cfg(hass: HomeAssistant):
 async def _fetch_json(session, url):
     headers = {
         "Accept": "application/json",
-        "User-Agent": "HomeAssistant-BlueprintStore/0.4 (+https://home-assistant.io)"
+        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://home-assistant.io)"
     }
     async with session.get(url, headers=headers) as resp:
         resp.raise_for_status()
@@ -74,8 +75,31 @@ def _guess_uses_from_cooked(cooked: str) -> int | None:
             return _maybe_int(m.group(1))
     return None
 
+# -------- Curated category (bucket) classifier --------
+_BUCKET_KEYWORDS = {
+    "notifications": ["notify", "notification", "alert", "telegram", "discord", "pushover", "push", "mobile_app", "email"],
+    "tts": ["tts", "text-to-speech", "speak", "say", "voice", "polly", "google tts", "azure tts"],
+    "alarm": ["alarmo", "alarm", "siren", "arm", "disarm", "intrusion", "security system"],
+    "camera": ["camera", "snapshot", "frigate", "rtsp", "reolink", "doorbell", "cctv"],
+    "lighting": ["light", "lights", "dimmer", "brightness", "led", "wled", "hue", "lifx"],
+    "presence": ["presence", "occupancy", "motion", "door", "window", "contact", "person", "arrival", "zone"],
+    "climate": ["climate", "thermostat", "hvac", "temperature", "humidity", "ac", "heater", "cool"],
+    "media": ["media", "spotify", "plex", "kodi", "sonos", "cast", "chromecast", "tv", "shield"],
+    "energy": ["energy", "power", "solar", "inverter", "consumption", "kwh", "watt", "battery"],
+    "security": ["security", "lock", "door lock", "smoke", "co ", "leak", "water", "gas", "tamper"],
+}
+
+def _classify_bucket(title: str, tags: set[str]) -> str:
+    t = (title or "").lower()
+    lower_tags = {s.lower() for s in (tags or set())}
+    for bucket, words in _BUCKET_KEYWORDS.items():
+        for w in words:
+            if w in t or w in lower_tags:
+                return bucket
+    return "other"
+
 async def _topic_detail(session, topic_id: int):
-    """Return dict {import_url, excerpt, author, uses} or None."""
+    """Return dict {import_url, excerpt, author, uses, cooked} or None."""
     data = await _fetch_json(session, f"{COMMUNITY_BASE}/t/{topic_id}.json")
     posts = data.get("post_stream", {}).get("posts", [])
     if not posts:
@@ -95,13 +119,13 @@ async def _topic_detail(session, topic_id: int):
         "excerpt": _excerpt(cooked),
         "author": author,
         "uses": uses,
+        "cooked": cooked,
     }
 
-async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, tags_filter: set[str] | None):
+async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket_filter: str | None):
     """
     Fetch a category page; keep only topics with import buttons.
     Title-only filter is applied before fetching post details.
-    Tag filter (subset match) uses topic.tags from the list JSON.
     """
     session = async_get_clientsession(hass)
     primary = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
@@ -122,14 +146,15 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, tags_f
             topic_tags = set(t.get("tags") or [])
             if q_title and q_title.lower() not in title.lower():
                 return
-            if tags_filter and not tags_filter.issubset(topic_tags):
-                return
             try:
                 detail = await _topic_detail(session, tid)
             except Exception as e:
                 _LOGGER.debug("topic %s detail failed: %s", tid, e)
                 return
             if not detail:
+                return
+            bucket = _classify_bucket(title, topic_tags)
+            if bucket_filter and bucket != bucket_filter:
                 return
             out.append({
                 "id": tid,
@@ -140,6 +165,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, tags_f
                 "excerpt": detail["excerpt"],
                 "uses": detail["uses"],
                 "tags": list(topic_tags),
+                "bucket": bucket,
             })
 
     tasks = []
@@ -156,7 +182,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, tags_f
 
 class BlueprintsPagedView(HomeAssistantView):
     """
-    GET /api/blueprint_store/blueprints?page=0&q_title=...&tags=a,b&sort=new|title|uses
+    GET /api/blueprint_store/blueprints?page=0&q_title=...&bucket=<one of CURATED_BUCKETS>&sort=new|title|uses
     Returns: {items:[...], page:N, has_more:bool}
     """
     url = f"{API_BASE}/blueprints"
@@ -171,8 +197,9 @@ class BlueprintsPagedView(HomeAssistantView):
         except ValueError:
             page = 0
         q_title = request.query.get("q_title")
-        tags_raw = request.query.get("tags") or ""
-        tags_filter = set([t for t in (s.strip() for s in tags_raw.split(",")) if t]) or None
+        bucket = request.query.get("bucket")
+        if bucket and bucket not in CURATED_BUCKETS:
+            bucket = None
         sort = (request.query.get("sort") or "new").lower()
 
         max_pages = int(_cfg(self.hass).get("max_pages", DEFAULT_MAX_PAGES))
@@ -180,7 +207,7 @@ class BlueprintsPagedView(HomeAssistantView):
             return self.json({"items": [], "page": page, "has_more": False})
 
         try:
-            items = await _list_page(self.hass, page, q_title, tags_filter)
+            items = await _list_page(self.hass, page, q_title, bucket)
             if sort == "title":
                 items.sort(key=lambda x: x["title"].lower())
             elif sort == "uses":
@@ -191,53 +218,10 @@ class BlueprintsPagedView(HomeAssistantView):
             _LOGGER.exception("Blueprint Store: paged list failed")
             return self.json({"items": [], "page": page, "has_more": False, "error": f"{type(e).__name__}: {e}"})
 
-class BlueprintsTopView(HomeAssistantView):
-    """
-    GET /api/blueprint_store/blueprints/top?limit=10
-    Scans pages until it finds 'limit' items with a usable 'uses' number (or stops at max_pages).
-    """
-    url = f"{API_BASE}/blueprints/top"
-    name = f"{DOMAIN}:top"
-    requires_auth = False
-    cors_allowed = True
-    def __init__(self, hass: HomeAssistant) -> None:
-        self.hass = hass
-    async def get(self, request):
-        try:
-            limit = max(1, min(50, int(request.query.get("limit", "10"))))
-        except ValueError:
-            limit = 10
-        max_pages = int(_cfg(self.hass).get("max_pages", DEFAULT_MAX_PAGES))
-        found: list[dict] = []
-        page = 0
-        try:
-            while page < max_pages and len(found) < limit:
-                items = await _list_page(self.hass, page, None, None)
-                for it in items:
-                    if it.get("uses") is not None:
-                        found.append(it)
-                        if len(found) >= limit:
-                            break
-                page += 1
-            if len(found) < limit:
-                page = 0
-                filler = []
-                while page < max_pages and len(found) + len(filler) < limit:
-                    filler.extend(await _list_page(self.hass, page, None, None))
-                    page += 1
-                need = limit - len(found)
-                found.extend(filler[:need])
-
-            found.sort(key=lambda x: (x["uses"] is None, -(x["uses"] or 0)))
-            return self.json({"items": found[:limit]})
-        except Exception as e:
-            _LOGGER.exception("Blueprint Store: top10 failed")
-            return self.json({"items": [], "error": f"{type(e).__name__}: {e}"})
-
 class BlueprintFiltersView(HomeAssistantView):
     """
-    GET /api/blueprint_store/filters?pages=20
-    Returns: {tags:[...]} aggregated from first N pages.
+    GET /api/blueprint_store/filters
+    Returns curated buckets list.
     """
     url = f"{API_BASE}/filters"
     name = f"{DOMAIN}:filters"
@@ -246,34 +230,40 @@ class BlueprintFiltersView(HomeAssistantView):
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
     async def get(self, request):
+        return self.json({"tags": CURATED_BUCKETS})
+
+class BlueprintTopicView(HomeAssistantView):
+    """
+    GET /api/blueprint_store/topic?id=12345
+    Returns {id, cooked, title}
+    """
+    url = f"{API_BASE}/topic"
+    name = f"{DOMAIN}:topic"
+    requires_auth = False
+    cors_allowed = True
+    def __init__(self, hass: HomeAssistant) -> None:
+        self.hass = hass
+    async def get(self, request):
         try:
-            scan_pages = max(1, min(200, int(request.query.get("pages", "20"))))
+            tid = int(request.query.get("id", "0"))
         except ValueError:
-            scan_pages = 20
-        max_pages = min(scan_pages, int(_cfg(self.hass).get("max_pages", DEFAULT_MAX_PAGES)))
-        all_tags: set[str] = set()
+            tid = 0
+        if not tid:
+            return self.json_message("Bad request", status_code=400)
+        session = async_get_clientsession(self.hass)
         try:
-            for p in range(max_pages):
-                session = async_get_clientsession(self.hass)
-                url = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={p}"
-                try:
-                    data = await _fetch_json(session, url)
-                except Exception:
-                    data = await _fetch_json(session, f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={p}")
-                topics = (data.get("topic_list", {}) or data).get("topics", [])
-                for t in topics:
-                    for tag in (t.get("tags") or []):
-                        all_tags.add(tag)
-            tags_sorted = sorted(all_tags)
-            return self.json({"tags": tags_sorted})
+            data = await _fetch_json(session, f"{COMMUNITY_BASE}/t/{tid}.json")
+            title = data.get("title") or ""
+            posts = data.get("post_stream", {}).get("posts", [])
+            cooked = posts[0].get("cooked", "") if posts else ""
+            return self.json({"id": tid, "title": title, "cooked": cooked})
         except Exception as e:
-            _LOGGER.exception("Blueprint Store: filters failed")
-            return self.json({"tags": [], "error": f"{type(e).__name__}: {e}"})
+            _LOGGER.exception("Blueprint Store: topic fetch failed")
+            return self.json({"id": tid, "cooked": "", "error": f"{type(e).__name__}: {e}"})
 
 # -------- Static panel + images --------
 
 class BlueprintStaticView(HomeAssistantView):
-    """Serve /panel files (version-proof)."""
     url = f"{STATIC_BASE}/{{filename:.*}}"
     name = f"{DOMAIN}:static"
     requires_auth = False
@@ -289,7 +279,6 @@ class BlueprintStaticView(HomeAssistantView):
         return web.FileResponse(path)
 
 class BlueprintImagesStaticView(HomeAssistantView):
-    """Serve files placed in custom_components/blueprint_store/images/"""
     url = f"{STATIC_BASE}/images/{{filename:.*}}"
     name = f"{DOMAIN}:static_images"
     requires_auth = False
@@ -309,8 +298,8 @@ async def _register(hass: HomeAssistant):
     if store.get("registered"):
         return
     hass.http.register_view(BlueprintsPagedView(hass))
-    hass.http.register_view(BlueprintsTopView(hass))
     hass.http.register_view(BlueprintFiltersView(hass))
+    hass.http.register_view(BlueprintTopicView(hass))
 
     panel_dir = os.path.join(os.path.dirname(__file__), "panel")
     images_dir = os.path.join(os.path.dirname(__file__), "images")
