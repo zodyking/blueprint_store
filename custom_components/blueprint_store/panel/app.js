@@ -7,29 +7,35 @@ const empty  = $("#empty");
 const errorB = $("#error");
 const search = $("#search");
 const refreshBtn = $("#refresh");
-const tagsSel = $("#tags");
-const chips = $("#chips");
 const sortSel = $("#sort");
+const tagsList = $("#tags-list");
+const clearBtn = $("#clear-filters");
 const sentinel = $("#sentinel");
 
 let page = 0;
 let qTitle = "";
 let loading = false;
 let hasMore = true;
-let activeTags = [];
 let sort = "new";
+let activeTags = new Set();
 
 function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
-const debounce = (fn,ms=300)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
 function openExternal(url){
   try { window.top?.open(url, "_blank", "noopener"); }
   catch { window.open(url, "_blank"); }
 }
 
-function usesBadge(n){
-  if (n == null) return "";
-  return `<span class="uses">${n.toLocaleString()} uses</span>`;
+function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
+
+/* My Home Assistant style import button HTML */
+function importButton(href){
+  return `
+    <a class="myha-btn" href="${href}" target="_blank" rel="noopener">
+      <sl-icon name="house"></sl-icon>
+      Import to Home Assistant
+    </a>`;
 }
 
 function renderCard(it){
@@ -38,16 +44,18 @@ function renderCard(it){
   el.innerHTML = `
     <div class="row">
       <h3>${esc(it.title)}</h3>
-      ${it.author ? `<span style="opacity:.85;font-weight:700">by ${esc(it.author)}</span>` : ""}
+      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
       ${usesBadge(it.uses)}
     </div>
     <p class="desc">${esc(it.excerpt || "")}</p>
-    <div class="actions">
-      <sl-button size="small" variant="primary" pill href="${it.import_url}" target="_blank" rel="noopener">Import to Home Assistant</sl-button>
+    <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
+      ${importButton(it.import_url)}
       <sl-button size="small" variant="default" pill class="forum">Forum post</sl-button>
     </div>
   `;
-  el.querySelector(".forum").addEventListener("click", (e) => { e.preventDefault(); openExternal(it.topic_url); });
+  el.querySelector(".forum").addEventListener("click", (e) => {
+    e.preventDefault(); openExternal(it.topic_url);
+  });
   return el;
 }
 
@@ -67,7 +75,7 @@ async function fetchPage(p){
   const url = new URL(`${API}/blueprints`, location.origin);
   url.searchParams.set("page", String(p));
   if (qTitle) url.searchParams.set("q_title", qTitle);
-  if (activeTags.length) url.searchParams.set("tags", activeTags.join(","));
+  if (activeTags.size) url.searchParams.set("tags", Array.from(activeTags).join(","));
   if (sort) url.searchParams.set("sort", sort);
   return await fetchJSON(url.toString());
 }
@@ -90,56 +98,59 @@ async function load(initial=false){
 }
 
 async function loadAllForSearch(){
-  // Aggressively fetch all pages so “everything” matching the title appears
+  // Fetch all pages for a “complete” title match result set
   page = 0; hasMore = true; list.innerHTML = ""; clearError();
-  let total = 0;
+  let first = true;
   while (hasMore) {
-    await load(total === 0);
-    total = list.childElementCount;
-    await new Promise(r => setTimeout(r, 10));
+    await load(first); first = false;
+    // let UI breathe
+    await new Promise(r => setTimeout(r, 6));
   }
 }
 
-/* ---- Filters & search ---- */
-const onSearch = debounce(async () => {
-  qTitle = (search.value || "").trim();
-  await loadAllForSearch();
-}, 300);
-
+/* ---------- Filters & search ---------- */
+const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); await loadAllForSearch(); }, 280);
 search.addEventListener("sl-input", onSearch);
 search.addEventListener("sl-clear", onSearch);
-
-tagsSel.addEventListener("sl-change", async () => {
-  activeTags = Array.from(tagsSel.value || []);
-  renderTagChips();
-  await loadAllForSearch();
-});
 
 sortSel.addEventListener("sl-change", async () => {
   sort = sortSel.value || "new";
   await loadAllForSearch();
 });
 
-refreshBtn.addEventListener("click", async () => {
+clearBtn.addEventListener("click", async () => {
+  activeTags.clear();
+  // uncheck all
+  tagsList.querySelectorAll("sl-checkbox").forEach(cb => cb.checked = false);
   await loadAllForSearch();
 });
 
-function renderTagChips(){
-  chips.innerHTML = "";
-  activeTags.forEach(tag => {
-    const chip = document.createElement("md-filter-chip");
-    chip.setAttribute("selected", "");
-    chip.textContent = tag;
-    chip.addEventListener("click", async () => {
-      const idx = activeTags.indexOf(tag);
-      if (idx >= 0) { activeTags.splice(idx, 1); updateTagsSelect(); await loadAllForSearch(); }
-    });
-    chips.appendChild(chip);
-  });
+/* Build tag checkboxes in the sidebar */
+async function loadFilters(){
+  try{
+    const data = await fetchJSON(`${API}/filters?pages=30`);
+    const tags = data.tags || [];
+    tagsList.innerHTML = "";
+    for (const tag of tags){
+      const row = document.createElement("sl-checkbox");
+      row.size = "small";
+      row.innerText = tag;
+      row.addEventListener("sl-change", async (e) => {
+        if (e.target.checked) activeTags.add(tag);
+        else activeTags.delete(tag);
+        // debounce to avoid glitch while quickly toggling
+        scheduleReload();
+      });
+      tagsList.appendChild(row);
+    }
+  }catch(e){ /* not fatal */ }
 }
-function updateTagsSelect(){ tagsSel.value = [...activeTags]; }
 
-/* ---- Top 10 ---- */
+/* Debounced reload after tag toggles */
+let reloadT = null;
+function scheduleReload(){ clearTimeout(reloadT); reloadT = setTimeout(loadAllForSearch, 200); }
+
+/* ---------- Top 10 ---------- */
 async function loadTop10(){
   try{
     const data = await fetchJSON(`${API}/blueprints/top?limit=10`);
@@ -148,27 +159,13 @@ async function loadTop10(){
   }catch(e){ /* not fatal */ }
 }
 
-/* ---- Tag list population ---- */
-async function loadFilters(){
-  try{
-    const data = await fetchJSON(`${API}/filters?pages=30`);
-    const tags = data.tags || [];
-    tagsSel.innerHTML = "";
-    for (const tag of tags){
-      const opt = document.createElement("sl-option");
-      opt.value = tag; opt.textContent = tag;
-      tagsSel.appendChild(opt);
-    }
-  }catch(e){ /* not fatal */ }
-}
-
-/* ---- Infinite scroll ---- */
+/* ---------- Infinite scroll ---------- */
 const io = new IntersectionObserver((entries)=>{
   if (entries[0] && entries[0].isIntersecting) load(false);
 },{ rootMargin:"700px" });
 io.observe(sentinel);
 
-/* ---- Kickoff ---- */
+/* ---------- Kickoff ---------- */
 await loadFilters();
 await loadTop10();
 await load(true);
