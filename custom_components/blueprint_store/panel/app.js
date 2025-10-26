@@ -1,107 +1,115 @@
 const API = "/api/blueprint_browser";
-const $ = (sel) => document.querySelector(sel);
+const $ = (s) => document.querySelector(s);
 
-const listEl   = $("#list");
-const emptyEl  = $("#empty");
-const errorEl  = $("#error");
-const loadEl   = $("#loading");
-const detailEl = $("#detail");
-const searchEl = $("#search");
-const sortEl   = $("#sort");
+const list   = $("#list");
+const empty  = $("#empty");
+const errorB = $("#error");
+const search = $("#search");
 const refreshBtn = $("#refresh");
+const sentinel = $("#sentinel");
 
-let items = [];
-let filtered = [];
+// state
+let page = 0;
+let q = "";
+let loading = false;
+let hasMore = true;
 
-function escapeHtml(s) {
-  return (s || "").replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
-  );
+// utils
+function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
+const debounce = (fn,ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+
+// open external links from inside iframe safely in a new tab
+function openExternal(url){
+  try { window.top?.open(url, "_blank", "noopener"); }
+  catch { window.open(url, "_blank"); }
 }
-const debounce = (fn, ms=200) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms);} };
 
-function card(item) {
+// rendering
+function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
   el.innerHTML = `
-    <div class="card-head"><h3 class="title">${escapeHtml(item.title)}</h3></div>
-    <div class="body">${escapeHtml(item.excerpt || "")}</div>
-    <div class="meta">
-      <a class="link" href="${item.topic_url}" target="_blank" rel="noopener">Forum post</a>
-      <a class="link btn-primary import" href="${item.import_url}" target="_blank" rel="noopener" style="padding:8px 12px;border-radius:10px;color:#fff;">Import</a>
-    </div>`;
-  el.querySelector(".title").addEventListener("click", () => showDetail(item));
+    <div class="row">
+      <h3 class="title">${esc(it.title)}</h3>
+      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
+    </div>
+    <div class="desc">${esc(it.excerpt || "")}</div>
+    <div class="actions">
+      <a class="import" href="${it.import_url}" target="_blank" rel="noopener">Import to Home Assistant</a>
+      <a class="link forum" href="${it.topic_url}" rel="noopener">Forum post</a>
+    </div>
+  `;
+  // force forum link into a new top-level tab (work around iframe X-Frame-Options)
+  el.querySelector(".forum").addEventListener("click", (e) => {
+    e.preventDefault();
+    openExternal(it.topic_url);
+  });
   return el;
 }
 
-function render() {
-  listEl.innerHTML = "";
-  if (!filtered.length) { listEl.style.display="none"; emptyEl.style.display="block"; return; }
-  emptyEl.style.display = "none"; listEl.style.display="grid";
-  filtered.forEach((it) => listEl.appendChild(card(it)));
+function appendItems(items){
+  for (const it of items) list.appendChild(renderCard(it));
 }
 
-function showDetail(item) {
-  $("#d-title").textContent = item.title;
-  $("#d-excerpt").textContent = item.excerpt || "";
-  $("#d-topic").href = item.topic_url;
-  $("#d-import").href = item.import_url;
-  document.querySelector("main").style.display = "none";
-  detailEl.style.display = "block";
+function setError(msg){
+  errorB.textContent = msg;
+  errorB.style.display = "block";
 }
-function showList() { detailEl.style.display = "none"; document.querySelector("main").style.display = "block"; }
+function clearError(){ errorB.style.display = "none"; errorB.textContent = ""; }
 
-function doFilterAndSort() {
-  const q = (searchEl.value || "").trim().toLowerCase();
-  filtered = !q ? items.slice() : items.filter(i =>
-    i.title.toLowerCase().includes(q) || (i.excerpt || "").toLowerCase().includes(q)
-  );
-  switch (sortEl.value) {
-    case "az": filtered.sort((a,b)=>a.title.localeCompare(b.title)); break;
-    case "za": filtered.sort((a,b)=>b.title.localeCompare(a.title)); break;
-    default:   filtered.sort((a,b)=>b.id - a.id); // newest
+// data
+async function fetchPage(p, query){
+  const url = new URL(`${API}/blueprints`, location.origin);
+  url.searchParams.set("page", String(p));
+  if (query) url.searchParams.set("q", query);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+async function load(initial=false){
+  if (loading || !hasMore && !initial) return;
+  loading = true;
+  clearError();
+  try{
+    const data = await fetchPage(page, q);
+    const items = Array.isArray(data) ? data : (data.items || []);
+    hasMore = !!data.has_more;
+    if (initial) {
+      list.innerHTML = "";
+      empty.style.display = items.length ? "none" : "block";
+    }
+    appendItems(items);
+    page += 1;
+  }catch(e){
+    setError(`Failed to load: ${String(e.message || e)}`);
+  }finally{
+    loading = false;
   }
-  render();
 }
 
-const onSearch = debounce(doFilterAndSort, 180);
-searchEl.addEventListener("input", onSearch);
-sortEl.addEventListener("change", doFilterAndSort);
+const onSearch = debounce(async () => {
+  q = (search.value || "").trim();
+  page = 0;
+  hasMore = true;
+  await load(true);
+}, 250);
 
-async function load() {
-  loadEl.style.display="block"; errorEl.style.display="none"; listEl.style.display="none"; emptyEl.style.display="none";
-  try {
-    const res = await fetch(`${API}/blueprints`);
-    const data = await res.json();
-    if (data.error) {
-      errorEl.textContent = `Failed to load: ${data.error}`;
-      errorEl.style.display = "block";
-      items = [];
-    } else {
-      items = Array.isArray(data) ? data : (data.items || []);
-      doFilterAndSort();
-    }
-  } catch (e) {
-    errorEl.textContent = `Failed to load: ${String(e.message || e)}`;
-    errorEl.style.display = "block";
-  } finally { loadEl.style.display="none"; }
-}
+search.addEventListener("input", onSearch);
 
-async function refresh() {
-  refreshBtn.disabled = true;
-  try {
-    const res = await fetch(`${API}/refresh`);
-    const data = await res.json().catch(()=>({}));
-    if (data && data.error) {
-      errorEl.textContent = `Refresh failed: ${data.error}`;
-      errorEl.style.display = "block";
-    }
-    await load();
-  } catch (e) {
-    errorEl.textContent = `Refresh failed: ${String(e.message || e)}`;
-    errorEl.style.display = "block";
-  } finally { refreshBtn.disabled = false; }
-}
-refreshBtn.addEventListener("click", refresh);
+refreshBtn.addEventListener("click", async () => {
+  page = 0; hasMore = true;
+  await load(true);
+});
 
-load();
+// infinite scroll via IntersectionObserver
+const io = new IntersectionObserver((entries)=>{
+  const last = entries[0];
+  if (last && last.isIntersecting) load(false);
+}, { rootMargin: "600px" });
+io.observe(sentinel);
+
+// kick off
+load(true);
