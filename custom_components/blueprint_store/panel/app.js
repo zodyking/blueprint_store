@@ -1,304 +1,154 @@
-/* Blueprint Store – requested fixes only:
- * - restore Creators Spotlight (accurate)
- * - search matches titles AND descriptions (client-side filter too)
- * - keep single expanding description + likes pill
- * - restore "View description" neutral button when multiple import badges exist
- * - keep dynamic heading / tag filter / sort
- */
-const API = "/api/blueprint_store";
-const $  = (s) => document.querySelector(s);
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Blueprint Store</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-/* helpers */
-const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-const sleep = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn, ms=260)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+  <!-- Shoelace -->
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
 
-async function fetchJSON(url, tries = 3) {
-  let delay = 500;
-  for (let i=0;i<tries;i++){
-    try{
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const j = await res.json();
-      if (j?.error) throw new Error(j.error);
-      return j;
-    }catch(e){
-      if (i<tries-1 && /429|502|503/.test(String(e))) { await sleep(delay); delay*=2; continue; }
-      throw e;
-    }
-  }
-}
+  <style>
+    :root{
+      --blue:#0d3b8e; /* classic blueprint blue */
+      --ink:#e6f0ff; --muted:#b9c7e6;
+      --card-bg: rgba(8,18,46,.86);
+      --card-bd: rgba(170,200,255,.22);
+      --card-bd-hover:#9dd1ff66;
+      --shadow: 0 18px 50px rgba(6,16,50,.45);
+      --maxw: 1200px;
 
-/* number shortener */
-const k = n => { const x = Number(n||0); if (x>=1e6) return (x/1e6).toFixed(1).replace(/\.0$/,"")+"m"; if (x>=1e3) return (x/1e3).toFixed(1).replace(/\.0$/,"")+"k"; return String(x|0); };
-const likePill = likes => `<span class="likes-pill"><i class="heart" aria-hidden="true"></i><span>${k(likes)}</span><span>Liked This</span></span>`;
-
-/* title cleanup (visual only) */
-function cleanTitle(raw){
-  if (!raw) return "";
-  let s = String(raw);
-  s = s.replace(/\[ *blueprint *\]\s*/ig, "");
-  s = s.replace(/^[^\p{L}\p{N}(]+/u, "");
-  s = s.replace(/[^\p{L}\p{N}\s()\-:]/gu, " ");
-  s = s.replace(/\s{2,}/g, " ").trim();
-  s = s.split(" ").map(w => (w===w.toUpperCase()&&w.length>=2) ? w : w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(" ");
-  s = s.replace(/\s*-\s*/g, " - ");
-  return s;
-}
-
-/* cooked rewrite (and count import badges) */
-function rewriteCookedAndCount(container){
-  let importCount = 0;
-  container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    importCount++;
-    a.classList.add("import-btn");
-    a.innerHTML = `<sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>`;
-  });
-  return importCount;
-}
-
-/* cache cooked HTML + import badge count by topic id */
-const cookedCache = new Map(); // id -> {html, count}
-
-/* card renderer */
-function renderCard(it){
-  const el = document.createElement("article");
-  el.className = "card";
-
-  const showNeutral = (it.import_count || 0) > 1;
-
-  el.innerHTML = `
-    <div class="row">
-      <h3 title="${esc(it.title)}">${esc(cleanTitle(it.title))}</h3>
-      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
-    </div>
-    <div class="tags">${(it.tags||[]).slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
-
-    <div class="desc-wrap collapsed" id="wrap-${it.id}">
-      <p class="desc">${esc(it.excerpt || "")}</p>
-      <div class="grad"></div>
-      <div class="toggle">Read more</div>
-    </div>
-
-    <div class="meta">${likePill(it.likes||0)}</div>
-    <div class="card__footer">
-      ${showNeutral
-        ? `<a class="neutral-btn" data-viewdesc="${it.id}"><sl-icon name="file-text"></sl-icon><span>View description</span></a>`
-        : `<a class="import-btn" href="${esc(it.import_url)}" target="_blank" rel="noopener">
-             <sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>
-           </a>`}
-    </div>
-  `;
-
-  const wrap = el.querySelector(`#wrap-${it.id}`);
-  const tog  = wrap.querySelector(".toggle");
-
-  async function expand(){
-    if (!cookedCache.has(it.id)) {
-      try{
-        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-        const tmp = document.createElement("div");
-        tmp.innerHTML = data.cooked || "";
-        const count = rewriteCookedAndCount(tmp);
-        cookedCache.set(it.id, { html: tmp.innerHTML, count });
-      }catch(e){
-        cookedCache.set(it.id, { html:`<em>Failed to load post: ${esc(String(e.message||e))}</em>`, count:0 });
-      }
-    }
-    wrap.classList.remove("collapsed");
-    wrap.innerHTML = `<div class="desc" style="-webkit-line-clamp:unset; overflow:visible">${cookedCache.get(it.id).html}</div><div class="toggle">Less</div>`;
-    wrap.querySelector(".toggle").addEventListener("click", collapse);
-  }
-  function collapse(){
-    wrap.classList.add("collapsed");
-    wrap.innerHTML = `<p class="desc">${esc(it.excerpt || "")}</p><div class="grad"></div><div class="toggle">Read more</div>`;
-    wrap.querySelector(".toggle").addEventListener("click", expand);
-  }
-  tog.addEventListener("click", expand);
-
-  const viewBtn = el.querySelector(`[data-viewdesc="${it.id}"]`);
-  if (viewBtn){
-    viewBtn.addEventListener("click", (ev)=>{ ev.preventDefault(); expand(); });
-  }
-
-  return el;
-}
-function appendItems(target, items){ for(const it of items) target.appendChild(renderCard(it)); }
-
-/* spotlight (accurate) */
-async function buildSpotlightAccurate(){
-  const host = $("#contrib"); const grid = $("#contribGrid");
-  if (!host || !grid) return;
-
-  // most popular (likes) + most recent straight from first page of their sorts
-  const mostLikedResp = await fetchJSON(`${API}/blueprints?page=0&sort=likes`);
-  const mostRecentResp= await fetchJSON(`${API}/blueprints?page=0&sort=new`);
-  const mostPopular = mostLikedResp?.items?.[0] || null;
-  const mostRecent  = mostRecentResp?.items?.[0] || null;
-
-  // author with most uploads (scan all pages, once)
-  let page=0, hasMore=true;
-  const counts = new Map();
-  while (hasMore){
-    const r = await fetchJSON(`${API}/blueprints?page=${page}&sort=title`);
-    const items = r?.items||[];
-    for(const it of items){ if(!it.author) continue; counts.set(it.author, (counts.get(it.author)||0)+1); }
-    hasMore = !!r?.has_more; page++;
-    await sleep(8);
-  }
-  let topAuthor=null, topCount=0;
-  for (const [a,c] of counts){ if (c>topCount){ topAuthor=a; topCount=c; } }
-
-  grid.innerHTML = `
-    <div class="contrib-card">
-      <h4>Most Popular Blueprint</h4>
-      <div class="contrib-title">${esc(mostPopular?.author ?? "—")}</div>
-      <div style="margin-top:8px">${esc(cleanTitle(mostPopular?.title ?? ""))}</div>
-    </div>
-    <div class="contrib-card">
-      <h4>Most Uploaded Blueprints</h4>
-      <div class="contrib-title">${esc(topAuthor ?? "—")}</div>
-      <div class="contrib-chip">${k(topCount)} blueprint(s)</div>
-    </div>
-    <div class="contrib-card">
-      <h4>Most Recent Upload</h4>
-      <div class="contrib-title">${esc(mostRecent?.author ?? "—")}</div>
-      <div style="margin-top:8px">${esc(cleanTitle(mostRecent?.title ?? ""))}</div>
-    </div>
-  `;
-  host.style.display = "block";
-}
-
-/* heading */
-function updateHeading({sort, bucket, q}) {
-  const h = $("#headingEl"); if (!h) return;
-  let base = (sort==="likes") ? "Most liked blueprints" : (sort==="title") ? "Titles A–Z" : "Newest blueprints";
-  const parts = [base];
-  if (bucket) parts.push(`tag: ${bucket}`);
-  if (q) parts.push(`query: “${q}”`);
-  h.textContent = parts.join(" • ");
-}
-
-/* boot + data plumbing */
-function boot(){
-  const list   = $("#list");
-  const empty  = $("#empty");
-  const errorB = $("#error");
-  const search = $("#search");
-  const sortSel = $("#sort");
-  const refreshBtn = $("#refresh");
-  const tagdd = $("#tagdd");
-  const tagbtn = $("#tagbtn");
-  const tagmenu = $("#tagmenu");
-  const sentinel = $("#sentinel");
-
-  if (!list) return;
-
-  let page = 0;
-  let qText = "";               // search (title or excerpt)
-  let loading = false;
-  let hasMore = true;
-  let sort = "new";
-  let bucket = "";
-
-  let epoch = 0;                      // increases on each new query
-  let io;                             // IntersectionObserver
-
-  const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
-  const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
-
-  async function fetchFilters(){
-    try{
-      const data = await fetchJSON(`${API}/filters`);
-      const tags = Array.isArray(data.tags) ? data.tags : [];
-      tagmenu.innerHTML = "";
-      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
-      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
-      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
-      tagmenu.addEventListener("sl-select", async (ev)=>{
-        bucket = ev.detail.item.value || "";
-        tagbtn.textContent = bucket || "All tags";
-        await loadAll(true);
-        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
-      });
-    }catch{}
-  }
-
-  function pageURL(p){
-    const url = new URL(`${API}/blueprints`, location.origin);
-    url.searchParams.set("page", String(p));
-    // server narrows by title; we still do client-side title+excerpt filter
-    if (qText) url.searchParams.set("q_title", qText);
-    if (sort) url.searchParams.set("sort", sort);
-    if (bucket) url.searchParams.set("bucket", bucket);
-    return url.toString();
-  }
-
-  function matchesQuery(it){
-    if (!qText) return true;
-    const q = qText.toLowerCase();
-    return (it.title || "").toLowerCase().includes(q) || (it.excerpt || "").toLowerCase().includes(q);
-  }
-
-  async function load(first, myEpoch, accumulateAll=false){
-    if (loading || (!hasMore && !first)) return;
-    loading = true; clearError();
-    try{
-      const data = await fetchJSON(pageURL(page));
-      if (myEpoch !== epoch) return; // stale
-      const items = (data.items || []).filter(matchesQuery);
-      if (first){ list.innerHTML = ""; empty.style.display = items.length ? "none" : "block"; }
-      appendItems(list, items);
-      hasMore = !!data.has_more;
-      page += 1;
-
-      // when searching descriptions, we accumulate all pages in one go so results are complete
-      if (accumulateAll && hasMore) await load(false, myEpoch, true);
-    }catch(e){
-      if (myEpoch === epoch) setError(`Failed to load: ${String(e.message||e)}`);
-    }finally{ loading = false; }
-  }
-
-  async function loadAll(resetSpotlight=false){
-    epoch += 1; const myEpoch = epoch;
-    page = 0; hasMore = true;
-    updateHeading({sort, bucket, q:qText});
-
-    // reset infinite scroll
-    if (io) io.disconnect();
-
-    const wantAllNow = !!qText;   // when searching, scan all pages so excerpt matches are included
-    await load(true, myEpoch, wantAllNow);
-
-    if (!wantAllNow && sentinel){
-      io = new IntersectionObserver((entries)=>{ if (entries[0]?.isIntersecting) load(false, myEpoch, false); }, {rootMargin:"700px"});
-      io.observe(sentinel);
+      --sl-input-background-color: transparent;
+      --sl-input-border-color: rgba(255,255,255,.32);
+      --sl-color-neutral-0: rgba(16,34,86,.98);
+      --sl-panel-background-color: rgba(16,34,86,.98);
     }
 
-    if (resetSpotlight) buildSpotlightAccurate();
-  }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; color:var(--ink);
+      font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
+      background: var(--blue);   /* solid blueprint blue (no gradient) */
+      min-height:100vh;
+      position:relative;
+    }
+    /* blueprint grid lines */
+    body::before{
+      content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
+      background-image:
+        linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
+      background-size:28px 28px;
+    }
 
-  // search (titles + descriptions)
-  if (search){
-    const onSearch = debounce(async ()=>{
-      qText = (search.value || "").trim();
-      await loadAll(false);
-    }, 260);
-    search.addEventListener("sl-input", onSearch);
-    search.addEventListener("sl-clear", onSearch);
-  }
+    header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
+    .bar{
+      max-width:var(--maxw); margin:0 auto; padding:8px 12px;
+      display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center;
+    }
+    .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
+    .brand img{ width:28px; height:28px; border-radius:6px; }
 
-  if (sortSel){
-    sortSel.addEventListener("sl-change", async ()=>{ sort = sortSel.value || "new"; await loadAll(false); });
-  }
-  if (refreshBtn){
-    refreshBtn.addEventListener("click", async ()=>{ await loadAll(true); });
-  }
+    sl-input::part(base){ background:transparent; }
+    sl-input::part(input){ color:#fff; }
+    sl-button.plain::part(base){ background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px; }
+    sl-button.plain::part(base):hover{ text-decoration: underline; }
+    sl-button.ghost::part(base){ background:transparent; border:none; box-shadow:none; }
 
-  fetchFilters();
-  updateHeading({sort, bucket, q:qText});
-  buildSpotlightAccurate();       // on boot
-  loadAll(false);
-}
+    main{ max-width:var(--maxw); margin:12px auto 64px; padding:0 12px; }
 
-document.addEventListener("DOMContentLoaded", boot);
+    .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
+    .banner img{ width:100%; display:block; }
+
+    .section-title{ margin:10px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+
+    /* Creators Spotlight */
+    .contrib{ margin:18px 0 22px; padding:16px; border-radius:16px; border:1px solid var(--card-bd); background:var(--card-bg); box-shadow:var(--shadow); }
+    .contrib-head{ margin:0 0 8px; color:#aee1ff; font-size:20px; font-weight:900; text-align:center; }
+    .contrib-sub{ margin:0 0 12px; opacity:.8; text-align:center; }
+    .contrib-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+    @media (max-width: 980px){ .contrib-grid{ grid-template-columns: 1fr; } }
+    .contrib-card{ border:1px solid var(--card-bd); background: var(--card-bg); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:flex-start; align-items:center; min-height:120px; text-align:center; }
+    .contrib-card h4{ margin:0 0 6px; font-weight:900; }
+    .contrib-title{ font-weight:800; margin:8px 0 0; }
+    .contrib-chip{ background:#0b1c48; border:1px solid #184a88; padding:6px 9px; border-radius:999px; font-weight:700; margin-top:8px; }
+
+    /* cards */
+    .card{
+      border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
+      box-shadow: var(--shadow); padding:16px; margin:14px 0; overflow:visible; position:relative;
+    }
+    .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
+    .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+    .card h3{ margin:0; font-size:18px; font-weight:900; }
+    .author{ opacity:.92; font-weight:700; }
+    .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
+    .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
+
+    /* expandable description (single block that grows/collapses) */
+    .desc-wrap{ background: rgba(4,8,22,.65); border:1px solid rgba(160,200,255,.14); border-radius:12px; padding:12px 14px; position:relative; --clamp: 5; }
+    .desc{ margin:0; color:var(--ink); line-height:1.55; display:-webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--clamp); overflow:hidden; }
+    .desc-wrap.collapsed .grad{ content:""; position:absolute; left:0; right:0; bottom:0; height:56px; border-radius:0 0 12px 12px; background: linear-gradient(180deg, rgba(4,8,22,0), rgba(4,8,22,.85)); pointer-events:none; }
+    .toggle{ margin-top:8px; color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
+
+    .meta{ display:flex; align-items:center; gap:8px; position:absolute; left:14px; bottom:14px; }
+    .likes-pill{ display:inline-flex; align-items:center; gap:10px; padding:8px 14px; border-radius:999px; border:1px solid rgba(255,255,255,.28); background:rgba(15,45,115,.35); font-weight:800; }
+    .heart{ width:18px; height:18px; display:inline-block; mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 21s-6.716-4.385-9.428-7.1a5.5 5.5 0 1 1 7.778-7.778L12 4.772l1.65-1.65a5.5 5.5 0 0 1 7.778 7.778C18.716 16.615 12 21 12 21z"/></svg>') center/contain no-repeat; background:#fff; }
+
+    .card__footer{ display:flex; justify-content:flex-end; align-items:center; margin-top:44px; gap:10px; }
+    .import-btn{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:999px; font-weight:800; color:#032149; text-decoration:none; background: linear-gradient(135deg, #00b2ff, #0a84ff); box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6; border: 1px solid rgba(255,255,255,.35); }
+    .neutral-btn{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:999px; font-weight:800; color:#f6f8ff; text-decoration:none; background: linear-gradient(135deg, #6d7a92, #4e5a74); border:1px solid rgba(255,255,255,.30); }
+
+    #error,#empty{ text-align:center; color:#e7eefc; }
+    #sentinel{ height:60px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <div class="brand">
+        <img src="/blueprint_store_static/images/bps_logo.png" alt="Blueprint Store"/>
+        <span>Blueprint Store</span>
+      </div>
+
+      <sl-input id="search" placeholder="Search titles & descriptions..." clearable pill>
+        <sl-icon name="search" slot="prefix"></sl-icon>
+      </sl-input>
+
+      <sl-select id="sort" value="new" hoist>
+        <sl-option value="new">Newest</sl-option>
+        <sl-option value="title">Title A–Z</sl-option>
+        <sl-option value="likes">Most liked</sl-option>
+      </sl-select>
+
+      <sl-dropdown id="tagdd" hoist>
+        <sl-button id="tagbtn" slot="trigger" caret class="plain" pill>All tags</sl-button>
+        <sl-menu id="tagmenu"></sl-menu>
+      </sl-dropdown>
+
+      <sl-button id="refresh" class="plain" pill>Refresh</sl-button>
+    </div>
+  </header>
+
+  <main>
+    <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
+
+    <!-- Creators Spotlight (restored) -->
+    <section id="contrib" class="contrib" style="display:none">
+      <h3 class="contrib-head">Creators Spotlight</h3>
+      <p class="contrib-sub">Shout-outs to makers moving the community forward.</p>
+      <div class="contrib-grid" id="contribGrid"></div>
+    </section>
+
+    <div class="section-title" id="headingEl">All blueprints</div>
+
+    <div id="list" class="cards-wrap"></div>
+    <p id="empty" style="display:none">No blueprints matched.</p>
+    <p id="error" style="display:none"></p>
+    <div id="sentinel"></div>
+  </main>
+
+  <script src="./app.js?v=spotlight-restore-3" defer></script>
+</body>
+</html>
