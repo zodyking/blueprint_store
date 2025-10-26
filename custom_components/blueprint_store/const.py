@@ -4,7 +4,7 @@ DOMAIN = "blueprint_store"
 CATEGORY_ID = 53
 
 # Crawl limits / refresh
-DEFAULT_MAX_PAGES = 500              # allow "everything" (tune if you like)
+DEFAULT_MAX_PAGES = 800              # scan deep so search returns “everything”
 DEFAULT_CACHE_SECONDS = 6 * 60 * 60  # reserved for future cache
 
 # Discourse + import detection
