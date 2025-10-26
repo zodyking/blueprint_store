@@ -4,8 +4,7 @@ import os
 import re
 import inspect
 import logging
-from time import time
-from urllib.parse import urljoin, urlencode
+from urllib.parse import urljoin
 
 from aiohttp import web
 from homeassistant.core import HomeAssistant
@@ -48,7 +47,7 @@ def _cfg(hass: HomeAssistant):
 async def _fetch_json(session, url):
     headers = {
         "Accept": "application/json",
-        "User-Agent": "HomeAssistant-BlueprintStore/0.2 (+https://home-assistant.io)"
+        "User-Agent": "HomeAssistant-BlueprintStore/0.3 (+https://home-assistant.io)"
     }
     async with session.get(url, headers=headers) as resp:
         resp.raise_for_status()
@@ -68,25 +67,21 @@ async def _topic_detail(session, topic_id: int):
     if import_href.startswith("/"):
         import_href = urljoin("https://my.home-assistant.io", import_href)
     author = (data.get("details", {}) or {}).get("created_by", {}) or {}
-    username = author.get("username") or ""
     return {
         "import_url": import_href,
         "excerpt": _excerpt(cooked),
-        "author": username,
+        "author": author.get("username") or "",
     }
 
 async def _list_page(hass: HomeAssistant, page: int, q: str | None):
-    """
-    Fetch a single category page from Discourse and return items that have import buttons.
-    We filter by q (title/excerpt/author) on the server side.
-    """
+    """Fetch a category page; filter to topics with import buttons; server-side search."""
     session = async_get_clientsession(hass)
-    page_url = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
+    primary = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
+    fallback = f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}"
     try:
-        data = await _fetch_json(session, page_url)
+        data = await _fetch_json(session, primary)
     except Exception:
-        # fallback to /c/<id>.json
-        data = await _fetch_json(session, f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}")
+        data = await _fetch_json(session, fallback)
 
     topics = (data.get("topic_list", {}) or data).get("topics", [])
     sem = asyncio.Semaphore(8)
@@ -125,16 +120,12 @@ async def _list_page(hass: HomeAssistant, page: int, q: str | None):
     if tasks:
         await asyncio.gather(*tasks)
 
-    # newer first
     items.sort(key=lambda x: x["id"], reverse=True)
     return items
 
 # ---------- Views (public) ----------
 class BlueprintsPagedView(HomeAssistantView):
-    """
-    GET /api/blueprint_browser/blueprints?page=0&q=...
-    Returns: {items: [...], page: N, has_more: bool}
-    """
+    """GET /api/blueprint_store/blueprints?page=0&q=..."""
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
     requires_auth = False
@@ -143,15 +134,13 @@ class BlueprintsPagedView(HomeAssistantView):
         self.hass = hass
     async def get(self, request):
         try:
-            page = int(request.query.get("page", "0"))
+            page = max(0, int(request.query.get("page", "0")))
         except ValueError:
             page = 0
         q = request.query.get("q")
         max_pages = int(_cfg(self.hass).get("max_pages", DEFAULT_MAX_PAGES))
-        if page < 0: page = 0
         if page >= max_pages:
             return self.json({"items": [], "page": page, "has_more": False})
-
         try:
             items = await _list_page(self.hass, page, q)
             has_more = (page + 1) < max_pages and len(items) > 0
@@ -192,7 +181,7 @@ async def _register(hass: HomeAssistant):
             component_name="iframe",
             sidebar_title=SIDEBAR_TITLE,
             sidebar_icon=SIDEBAR_ICON,
-            frontend_url_path=DOMAIN,
+            frontend_url_path=DOMAIN,  # /blueprint_store in the sidebar
             config={"url": PANEL_URL},
             require_admin=False,
         )
@@ -213,5 +202,4 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.get(DOMAIN, {}).pop("registered", None)
-    # panel stays harmless; HA cleans at reload
     return True
