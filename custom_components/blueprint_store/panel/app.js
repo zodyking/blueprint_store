@@ -1,4 +1,4 @@
-const API = "/api/blueprint_browser";
+const API = "/api/blueprint_store";
 const $ = (s) => document.querySelector(s);
 
 const list   = $("#list");
@@ -8,23 +8,19 @@ const search = $("#search");
 const refreshBtn = $("#refresh");
 const sentinel = $("#sentinel");
 
-// state
 let page = 0;
 let q = "";
 let loading = false;
 let hasMore = true;
 
-// utils
 function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
 const debounce = (fn,ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
-// open external links from inside iframe safely in a new tab
 function openExternal(url){
   try { window.top?.open(url, "_blank", "noopener"); }
   catch { window.open(url, "_blank"); }
 }
 
-// rendering
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
@@ -37,9 +33,7 @@ function renderCard(it){
     <div class="actions">
       <a class="import" href="${it.import_url}" target="_blank" rel="noopener">Import to Home Assistant</a>
       <a class="link forum" href="${it.topic_url}" rel="noopener">Forum post</a>
-    </div>
-  `;
-  // force forum link into a new top-level tab (work around iframe X-Frame-Options)
+    </div>`;
   el.querySelector(".forum").addEventListener("click", (e) => {
     e.preventDefault();
     openExternal(it.topic_url);
@@ -47,17 +41,10 @@ function renderCard(it){
   return el;
 }
 
-function appendItems(items){
-  for (const it of items) list.appendChild(renderCard(it));
-}
-
-function setError(msg){
-  errorB.textContent = msg;
-  errorB.style.display = "block";
-}
+function appendItems(items){ for (const it of items) list.appendChild(renderCard(it)); }
+function setError(msg){ errorB.textContent = msg; errorB.style.display = "block"; }
 function clearError(){ errorB.style.display = "none"; errorB.textContent = ""; }
 
-// data
 async function fetchPage(p, query){
   const url = new URL(`${API}/blueprints`, location.origin);
   url.searchParams.set("page", String(p));
@@ -70,9 +57,8 @@ async function fetchPage(p, query){
 }
 
 async function load(initial=false){
-  if (loading || !hasMore && !initial) return;
-  loading = true;
-  clearError();
+  if (loading || (!hasMore && !initial)) return;
+  loading = true; clearError();
   try{
     const data = await fetchPage(page, q);
     const items = Array.isArray(data) ? data : (data.items || []);
@@ -83,17 +69,13 @@ async function load(initial=false){
     }
     appendItems(items);
     page += 1;
-  }catch(e){
-    setError(`Failed to load: ${String(e.message || e)}`);
-  }finally{
-    loading = false;
-  }
+  }catch(e){ setError(`Failed to load: ${String(e.message || e)}`); }
+  finally{ loading = false; }
 }
 
 const onSearch = debounce(async () => {
   q = (search.value || "").trim();
-  page = 0;
-  hasMore = true;
+  page = 0; hasMore = true;
   await load(true);
 }, 250);
 
@@ -104,12 +86,9 @@ refreshBtn.addEventListener("click", async () => {
   await load(true);
 });
 
-// infinite scroll via IntersectionObserver
 const io = new IntersectionObserver((entries)=>{
-  const last = entries[0];
-  if (last && last.isIntersecting) load(false);
-}, { rootMargin: "600px" });
+  if (entries[0] && entries[0].isIntersecting) load(false);
+},{ rootMargin:"600px" });
 io.observe(sentinel);
 
-// kick off
 load(true);
