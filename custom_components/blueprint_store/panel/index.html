@@ -4,89 +4,55 @@
     <meta charset="utf-8" />
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Tailwind CDN + Flowbite (UI Library) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.css">
+    <script>tailwind.config = { theme: { extend: { colors: { brand: { 600:'#0d3b8e', 500:'#0a5bd8' } } } } };</script>
     <style>
-      /* Blueprint logo aesthetic */
-      :root{
-        --bg1:#0d3b8e; --bg2:#0a5bd8;
-        --grid:#ffffff14;
-        --card:#0f1630; --card2:#11214f;
-        --text:#e6f0ff; --muted:#b9c7e6;
-        --accent:#5ab5ff; --accent2:#9dd1ff;
-        --radius:18px; --pad:18px; --maxw:980px;
-        --shadow:0 10px 30px rgba(0,0,0,.4);
-      }
-      @media (prefers-color-scheme: light){
-        :root{ --card:#ffffff; --card2:#f5f8ff; --text:#0b1b3a; --muted:#3b5a8f; --shadow:0 8px 24px rgba(25,60,140,.2);}
-      }
-      *{box-sizing:border-box}
-      body{
-        margin:0; color:var(--text); font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu;
-        background: linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 100%);
-        min-height:100vh;
-      }
+      /* Blueprint-style background grid that matches your logo */
       body::before{
-        content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+        content:"";
+        position:fixed; inset:0; pointer-events:none; z-index:-1;
+        background:
+          linear-gradient(180deg, rgba(10,91,216,.35), rgba(13,59,142,.65)),
+          linear-gradient(0deg, rgba(0,0,0,.25), rgba(0,0,0,.25));
+      }
+      body::after{
+        content:"";
+        position:fixed; inset:0; pointer-events:none; z-index:-2;
         background-image:
-          linear-gradient(to right, var(--grid) 1px, transparent 1px),
-          linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
-        background-size: 24px 24px;
+          linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
+        background-size: 28px 28px;
       }
-      header{
-        position:sticky; top:0; z-index:5; padding:10px 12px;
-        backdrop-filter: blur(10px);
-        background: linear-gradient(180deg, rgba(8,24,70,.85), rgba(8,24,70,.6));
-        border-bottom: 1px solid #ffffff1f;
-      }
-      .bar{ max-width:var(--maxw); margin:0 auto; display:flex; gap:12px; align-items:center; }
-      .brand{ font-weight:800; letter-spacing:.3px; }
-      .pill{
-        flex:1; display:flex; align-items:center; gap:10px;
-        background: linear-gradient(180deg, #0c2e6e, #0b2252);
-        border:1px solid #ffffff1f; border-radius:999px; padding:10px 14px; box-shadow:var(--shadow);
-      }
-      .pill input{ width:100%; font-size:16px; background:transparent; border:0; outline:0; color:var(--text); }
-      .btn{ border:1px solid #ffffff2a; color:#0c2150; background:linear-gradient(135deg, var(--accent), var(--accent2));
-            border-radius:12px; padding:10px 14px; cursor:pointer; font-weight:600; box-shadow:var(--shadow); }
-
-      main{ max-width:var(--maxw); margin:18px auto; padding:0 12px; position:relative; z-index:1; }
-
-      .card{
-        background: linear-gradient(180deg, var(--card2), var(--card));
-        border:1px solid #ffffff22; border-radius:var(--radius); box-shadow:var(--shadow);
-        padding:var(--pad); margin: 14px 0;
-      }
-      .row{ display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; }
-      .title{ font-size:20px; font-weight:900; margin:0; }
-      .author{ color:var(--muted); font-weight:600; }
-      .desc{ margin:10px 0 14px; color:var(--muted); line-height:1.5; }
-      .actions{ display:flex; gap:10px; flex-wrap:wrap; }
-      .link{ text-decoration:none; color:#cfe6ff; }
-      .import{ color:#0a2554; background:#9dd1ff; border-radius:10px; padding:8px 12px; text-decoration:none; font-weight:700; }
-      .import:active{ transform:translateY(1px); }
-
-      .empty,.error{ text-align:center; color:#cbd8ff; padding:24px; }
-      #sentinel{ height:60px; }
     </style>
   </head>
-  <body>
-    <header>
-      <div class="bar">
-        <div class="brand">Blueprint Store</div>
-        <div class="pill">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21 21l-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="#a9c7ff" stroke-width="2" stroke-linecap="round"/></svg>
-          <input id="search" type="search" placeholder="Search blueprints by title, author, or description…"/>
+  <body class="text-slate-100">
+    <!-- Sticky nav -->
+    <header class="sticky top-0 z-10 backdrop-blur border-b border-white/10 bg-brand-600/70">
+      <div class="max-w-5xl mx-auto px-3 py-2 flex items-center gap-3">
+        <span class="font-black tracking-wide">Blueprint Store</span>
+        <div class="flex-1">
+          <label class="relative block">
+            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-white/70">
+              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none"><path d="M21 21l-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </span>
+            <input id="search" type="search" placeholder="Search blueprints by title (loads every match)…"
+              class="w-full rounded-full bg-white/10 border border-white/20 pl-10 pr-3 py-2 text-sm placeholder-white/60 outline-none focus:ring-2 focus:ring-sky-300" />
+          </label>
         </div>
-        <button id="refresh" class="btn">Refresh</button>
+        <button id="refresh" class="rounded-lg bg-sky-300 text-sky-900 px-3 py-2 text-sm font-semibold shadow">Refresh</button>
       </div>
     </header>
 
-    <main>
-      <div id="list"></div>
-      <div id="empty" class="empty" style="display:none">No blueprints matched.</div>
-      <div id="error" class="error" style="display:none"></div>
-      <div id="sentinel"></div>
+    <main class="max-w-5xl mx-auto px-3 py-4">
+      <div id="list" class="space-y-4"></div>
+      <p id="empty" class="hidden text-center text-white/70 py-6">No blueprints matched.</p>
+      <p id="error" class="hidden text-center text-rose-200 py-3"></p>
+      <div id="sentinel" class="h-12"></div>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
