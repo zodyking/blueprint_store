@@ -1,11 +1,13 @@
-/* Blueprint Store — focused fixes (stable desc, direct import, footer) */
+/* Blueprint Store — fixes: smaller footer, single desc box, direct-import (no double open),
+   restore sort/tags/search, title parsing, read-more left + import right, creator count label. */
+
 const API = "/api/blueprint_store";
 const $  = (s, d=document) => d.querySelector(s);
 
 /* ---------------- helpers ---------------- */
 function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 const wait = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const debounce = (fn,ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
 async function fetchJSON(url, tries=3){
   let backoff = 500;
@@ -26,27 +28,27 @@ async function fetchJSON(url, tries=3){
   }
 }
 
-/* open directly (no interstitial) */
-function openDirect(url){
+/* open directly (no interstitial) — and only once */
+function openDirectOnce(ev, url){
+  if (ev){ ev.preventDefault(); ev.stopPropagation(); }
   try{
     const w = window.open(url, "_blank", "noopener,noreferrer");
     if (!w) location.assign(url);
   }catch{ location.assign(url); }
 }
 
-/* remove Discourse “image1536x…” attachment links + rewrite any forum links through our API redirect;
-   keep my.home-assistant.io import links intact so users can click them inside the description */
+/* remove “image1234x456 …” attachment links, rewrite forum links to API redirect */
 function sanitizeCookedHTML(html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "";
 
-  // drop “image1536x...” onebox/attachments
-  tmp.querySelectorAll('a[href*="image"][href$=".jpg"], a[href*="image"][href$=".png"], a[href*="image"]').forEach(a=>{
-    if (/image\d+x\d+/i.test(a.textContent||"")) a.remove();
+  // drop attachment links that show as "image1536x1024 …"
+  tmp.querySelectorAll('a').forEach(a=>{
+    const t = (a.textContent||"").trim();
+    if (/^image\d+x\d+\b/i.test(t)) a.remove();
   });
 
-  // forum topic links -> go redirecter (improves in-iframe navigation),
-  // leave my.home-assistant.io import links untouched
+  // rewrite community links via redirect (leave my.home-assistant.io links intact)
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
     try{
       const u = new URL(a.href);
@@ -59,8 +61,8 @@ function sanitizeCookedHTML(html){
         if (id){
           const qs = new URLSearchParams({ tid:id, slug }).toString();
           a.setAttribute("href", `${API}/go?${qs}`);
-          a.setAttribute("target","_blank");
-          a.setAttribute("rel","noopener");
+          a.target = "_blank";
+          a.rel = "noopener";
         }
       }
     }catch{}
@@ -69,11 +71,46 @@ function sanitizeCookedHTML(html){
   return tmp.innerHTML;
 }
 
-/* persistent expanded state */
+/* title parsing (clean + title-case with acronyms kept) */
+const ACRONYMS = new Set(["ZHA","Z2M","MQTT","API","RGB","RGBW","AI","TTS","STT","LLM","HVAC","UV","TV","UPS"]);
+function cleanTitle(raw){
+  if (!raw) return "";
+  let t = raw;
+
+  // remove [Blueprint] tokens
+  t = t.replace(/\[?\s*blue\s*print\s*]?/ig, "");
+
+  // strip leading emojis/symbols until letter/number/(
+  t = t.replace(/^[^\p{L}\p{N}(]+/u, "");
+
+  // drop most specials except () - _ : and spaces
+  t = t.replace(/[^\p{L}\p{N}\s()\-_:]/gu, "");
+
+  // collapse whitespace/dashes
+  t = t.replace(/\s{2,}/g, " ").replace(/\s-\s/g, " - ").trim();
+
+  // Title Case while keeping acronyms & already-all-caps
+  t = t.split(" ").map(w=>{
+    if (ACRONYMS.has(w.toUpperCase())) return w.toUpperCase();
+    if (/^[A-Z0-9]{3,}$/.test(w)) return w; // keep existing caps like "HAOS"
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+  }).join(" ");
+
+  return t;
+}
+
+/* format likes */
+function formatLikes(n){
+  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}m`;
+  if (n >= 1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
+  return String(n);
+}
+
+/* expanded/cached cooked */
 const expandedMap = new Map();   // postId -> boolean
 const cookedCache = new Map();   // postId -> sanitized cooked HTML
 
-/* -------- creators footer -------- */
+/* ---------------- creators footer ---------------- */
 function footerSpin(show=true){
   const s = $("#creators-spin");
   if (s) s.style.opacity = show ? "1" : "0";
@@ -91,7 +128,7 @@ function renderCreatorsFooter(stats){
       <section class="contrib-card">
         <div class="contrib-head">Most Uploaded Blueprints</div>
         <div class="author">${esc(stats.uploader.name || "-")}</div>
-        <div class="desc"><span class="count-chip">${stats.uploader.count ?? 0}</span></div>
+        <div class="desc"><span class="count-chip">${(stats.uploader.count ?? 0)} Blueprints</span></div>
       </section>
       <section class="contrib-card">
         <div class="contrib-head">Most Recent Upload</div>
@@ -100,8 +137,6 @@ function renderCreatorsFooter(stats){
       </section>
     </div>`;
 }
-
-/* compute footer from items we already loaded */
 function computeCreatorStats(items){
   const byAuthor = new Map();
   let mostLiked = null, mostRecent = null;
@@ -125,57 +160,6 @@ function computeCreatorStats(items){
 }
 
 /* ---------------- card rendering ---------------- */
-function makeCard(it){
-  const el = document.createElement("article");
-  el.className = "card";
-  el.dataset.id = it.id;
-
-  const liked = it.likes ?? 0;
-  const showGreyImport = (it.import_count || 0) > 1;  // multiple import badges inside cooked
-
-  el.innerHTML = `
-    <h3 class="title">${esc(it.title)}</h3>
-    ${it.author ? `<div class="meta">by ${esc(it.author)} <span class="pill likes">${esc(formatLikes(liked))} <b>Liked This</b></span></div>` : ""}
-    ${tagPills([...(it.tags||[])])}
-    <div class="desc-box" id="desc-${it.id}">
-      ${esc(it.excerpt || "No description")}
-    </div>
-    <div class="row-actions">
-      <button class="readmore" data-read="${it.id}" type="button">Read more</button>
-      ${showGreyImport
-        ? `<button class="cta gray" data-open="desc:${it.id}">Read description</button>`
-        : `<button class="cta" data-import="${esc(it.import_url||"")}">Import to Home Assistant</button>`
-      }
-    </div>
-  `;
-
-  // double-click anywhere on the card toggles the same read/open
-  el.addEventListener("dblclick", async (ev)=>{
-    // don’t trigger when double-clicking a link within cooked HTML
-    if (ev.target.closest("a")) return;
-    const id = it.id;
-    await toggleDesc(id, it, el);
-  });
-
-  // read more
-  el.querySelector('[data-read]')?.addEventListener("click", async ()=>{
-    await toggleDesc(it.id, it, el);
-  });
-
-  // import (direct, no interstitial)
-  el.querySelector('[data-import]')?.addEventListener("click", (ev)=>{
-    const url = ev.currentTarget.getAttribute("data-import");
-    if (url) openDirect(url);
-  });
-
-  // if button says “Read description”
-  el.querySelector('[data-open^="desc:"]')?.addEventListener("click", async ()=>{
-    await toggleDesc(it.id, it, el, true);
-  });
-
-  return el;
-}
-
 function tagPills(tags){
   const set = [];
   (tags||[]).forEach(t => { const v=(t||"").toString().trim(); if(v && !set.includes(v)) set.push(v); });
@@ -183,13 +167,6 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-function formatLikes(n){
-  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}m`;
-  if (n >= 1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
-  return String(n);
-}
-
-/* expand/collapse one dark description box in place */
 async function toggleDesc(id, it, card, forceOpen=false){
   const box = card.querySelector(`#desc-${id}`);
   const nowExpanded = forceOpen ? true : !expandedMap.get(id);
@@ -213,6 +190,55 @@ async function toggleDesc(id, it, card, forceOpen=false){
   expandedMap.set(id, nowExpanded);
 }
 
+function makeCard(it){
+  const el = document.createElement("article");
+  el.className = "card";
+  el.dataset.id = it.id;
+
+  const liked = it.likes ?? 0;
+  const showGreyImport = (it.import_count || 0) > 1;
+
+  el.innerHTML = `
+    <h3 class="title">${esc(cleanTitle(it.title))}</h3>
+    ${it.author ? `<div class="meta">by ${esc(it.author)} <span class="pill likes">${esc(formatLikes(liked))} <b>Liked This</b></span></div>` : ""}
+    ${tagPills([...(it.tags||[])])}
+    <div class="desc-box" id="desc-${it.id}">${esc(it.excerpt || "No description")}</div>
+    <div class="row-actions">
+      <button class="readmore" data-read="${it.id}" type="button">Read more</button>
+      ${showGreyImport
+        ? `<button class="cta gray" data-open="desc:${it.id}">Read description</button>`
+        : `<button class="cta" data-import="${esc(it.import_url||"")}">Import to Home Assistant</button>`
+      }
+    </div>
+  `;
+
+  // double-click toggles description (don’t trigger if clicking inside links)
+  el.addEventListener("dblclick", async (ev)=>{
+    if (ev.target.closest("a")) return;
+    await toggleDesc(it.id, it, el);
+  });
+
+  // explicit read more
+  el.querySelector('[data-read]')?.addEventListener("click", async (ev)=>{
+    ev.preventDefault(); ev.stopPropagation();
+    await toggleDesc(it.id, it, el);
+  });
+
+  // import (single open only)
+  el.querySelector('[data-import]')?.addEventListener("click", (ev)=>{
+    const url = ev.currentTarget.getAttribute("data-import");
+    if (url) openDirectOnce(ev, url);
+  });
+
+  // when multiple imports -> open description instead
+  el.querySelector('[data-open^="desc:"]')?.addEventListener("click", async (ev)=>{
+    ev.preventDefault(); ev.stopPropagation();
+    await toggleDesc(it.id, it, el, true);
+  });
+
+  return el;
+}
+
 /* ---------------- paging & boot ---------------- */
 async function boot(){
   const list      = $("#list");
@@ -227,13 +253,12 @@ async function boot(){
   if (!list) return;
 
   let page = 0, hasMore = true, loading = false;
-  let sort = "likes";
+  let sort = "likes";          // "likes" | "new" | "title"
   let q = "";
   let bucket = "";
 
   // dynamic heading text
   const headingEl = $("#heading");
-
   function setHeading(){
     let title = (sort === "likes") ? "Most liked blueprints"
               : (sort === "title") ? "Title A–Z"
@@ -247,7 +272,7 @@ async function boot(){
   async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
-    if (q)      url.searchParams.set("q_title", q);
+    if (q){ url.searchParams.set("q", q); url.searchParams.set("q_title", q); } // support both keys
     if (sort)   url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
     return await fetchJSON(url.toString());
@@ -266,18 +291,14 @@ async function boot(){
         list.innerHTML = "";
         empty.style.display = items.length ? "none":"block";
       }
-
-      // append cards
       for (const it of items) list.appendChild(makeCard(it));
 
-      // fill footer from the first page only (enough to be useful + fast)
       if (page === 0){
         footerSpin(true);
         const stats = computeCreatorStats(items);
         renderCreatorsFooter(stats);
         footerSpin(false);
       }
-
       page += 1;
     }catch(e){
       errorBox.textContent = `Failed to load: ${String(e.message||e)}`;
@@ -301,17 +322,17 @@ async function boot(){
     });
   }
 
-  // search (title/desc already handled server-side in your API; here we pass q_title as before)
+  // search (debounced & snappy)
   if (searchIn){
     const onS = debounce(async ()=>{
       q = (searchIn.value||"").trim();
       await reloadAll();
-    }, 280);
+    }, 220);
     searchIn.addEventListener("sl-input", onS);
     searchIn.addEventListener("sl-clear", onS);
   }
 
-  // tags
+  // tags menu
   try{
     const f = await fetchJSON(`${API}/filters`);
     const tags = Array.isArray(f.tags) ? f.tags : [];
@@ -348,28 +369,36 @@ style.textContent = `
     transition: max-height .25s ease;
   }
   .desc-box.open{ max-height: 9999px; }
-  .row-actions{ display:flex; gap:10px; align-items:center; margin:8px 0 2px; }
-  .cta{ background:linear-gradient(135deg,#00b2ff,#0a84ff); color:#032149;
+
+  .row-actions{
+    display:flex; align-items:center; margin-top:8px;
+  }
+  .readmore{ margin-right:auto; background:transparent; color:#d6e6ff;
+    border:1px solid #ffffff33; border-radius:999px; padding:8px 12px; font-weight:700; }
+  .cta{ margin-left:auto; background:linear-gradient(135deg,#00b2ff,#0a84ff); color:#032149;
        border:1px solid rgba(255,255,255,.35); border-radius:999px;
        padding:10px 14px; font-weight:800; }
   .cta.gray{ background:#6d7a92; color:#f6f8ff; }
+
   .pill.likes{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; margin-left:8px; }
   .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 6px; }
   .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
-  /* footer */
+
+  /* compact footer */
   #creators-footer{ position:fixed; left:0; right:0; bottom:0; z-index:5;
     background:linear-gradient(180deg, rgba(10,20,52,.86), rgba(8,18,46,.94));
-    border-top:1px solid rgba(255,255,255,.15); padding:12px 14px 14px; }
-  .contrib-grid{ display:grid; gap:10px; grid-template-columns:repeat(3,1fr); max-width:1200px; margin:0 auto; }
-  .contrib-card{ border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:12px;
+    border-top:1px solid rgba(255,255,255,.15); padding:8px 10px 10px; }
+  .contrib-grid{ display:grid; gap:8px; grid-template-columns:repeat(3,1fr); max-width:1200px; margin:0 auto; }
+  .contrib-card{ border:1px solid rgba(255,255,255,.18); border-radius:12px; padding:8px 10px;
     background:linear-gradient(180deg, rgba(12,24,58,.82), rgba(9,20,50,.88)); }
-  .contrib-head{ font-weight:900; margin-bottom:6px; }
-  #creators-spin{ display:block; width:12px; height:12px; border-radius:999px; border:2px solid #9dd1ff; border-top-color:transparent;
-    margin:6px auto; animation: sp 1s linear infinite; opacity:0; }
+  .contrib-head{ font-weight:900; margin-bottom:2px; font-size:12px; }
+  .author{ font-weight:800; font-size:12px; }
+  .desc{ font-size:12px; opacity:.95; }
+  #creators-spin{ display:block; width:10px; height:10px; border-radius:999px; border:2px solid #9dd1ff; border-top-color:transparent;
+    margin:4px auto; animation: sp 1s linear infinite; opacity:0; }
   @keyframes sp{ to { transform: rotate(360deg); } }
-  .author{ font-weight:800; }
-  .count-chip{ display:inline-block; padding:6px 10px; border-radius:999px; background:#0a84ff; color:#032149; border:1px solid #fff5; font-weight:800; }
-  body{ padding-bottom: 132px; } /* prevent footer overlap */
+  .count-chip{ display:inline-block; padding:4px 8px; border-radius:999px; background:#0a84ff; color:#032149; border:1px solid #fff5; font-weight:800; font-size:12px; }
+  body{ padding-bottom: 92px; }
 `;
 document.head.appendChild(style);
 
