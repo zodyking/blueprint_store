@@ -1,18 +1,20 @@
-/* Blueprint Store — UI glue
- * Scope: fixed sort menu stability, robust tag filter, likes pill, dark desc area that expands,
- *        dynamic heading, creator spotlight, contributors strip, word-based search
+/* Blueprint Store – UI glue
+ * Scope: only requested changes
+ * - expanded tag logic (brand keywords → tag; fallback "Other")
+ * - single description area with dark bg that expands/collapses (incl. double-click)
+ * - keep gray "View description" CTA when multiple MyHA badges
+ * - preserve sorting, filters, spotlight, and everything else
  */
+
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
 /* ---------- small helpers ---------- */
-const esc = (s => (s ?? "").toString().replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])));
-const once = (el, name, fn) => { el.addEventListener(name, fn, { once:true }); };
-const sleep = (ms=200) => new Promise(r=>setTimeout(r,ms));
-const debounce = (fn, ms=250) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; };
+function esc(s){ return (s||"").toString().replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
+const wait = (ms)=> new Promise(r=> setTimeout(r, ms));
+const debounce = (fn, ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t = setTimeout(()=>fn(...a), ms); }; };
 
-/* ---------- network ---------- */
 async function fetchJSONRaw(url){
   const res = await fetch(url);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -26,542 +28,474 @@ async function fetchJSON(url, tries=3){
     try { return await fetchJSONRaw(url); }
     catch(e){
       const msg = String(e.message||e);
-      if (i<tries-1 && /429|timeout|network/i.test(msg)) {
-        await sleep(delay + Math.random()*250);
-        delay = Math.min(4000, delay*2);
-        continue;
-      }
+      if (i < tries-1 && /429/.test(msg)) { await wait(delay + Math.random()*250); delay *= 2; continue; }
       throw e;
     }
   }
 }
 
-/* ---------- curated tags (expanded) ---------- */
-const TAG_DEFS = [
-  ["Lighting", [
-    "light","lights","illumination","led","bulb","strip","rgb","rgbw","rgbcw","cct",
-    "dimmer","brightness","fade","color","colour","hue","lifx","nanoleaf","govee",
-    "wiz","ikea tradfri","philips hue","tuya light","yeelight","scene light",
-    "motion light","night light","ambilight","backlight","downlight","spotlight",
-    "switch light","lamp","wall wash"
-  ]],
-  ["Climate & Ventilation", [
-    "temp","temperature","climate","hvac","thermostat","heating","cooling","ventilation",
-    "fan","radiator","heat pump","humidifier","dehumidifier","vent","aircon","ac",
-    "ecobee","nest","tado","honeywell","daikin","mitsubishi","bosch","trane","furnace",
-    "air handler","vrf","mini split","heater","boiler","thermo","aqara thermostat"
-  ]],
-  ["Security & Alarm", [
-    "alarm","alarmo","armed","arm","disarm","entry","exit","delay","siren","intrusion",
-    "tamper","glassbreak","door contact","window contact","security system","keypad",
-    "pin code","panic","perimeter","motion sensor","pir","reed switch","zone bypass",
-    "alert mode","security camera","armer","arming","triggered","burglar"
-  ]],
-  ["Safety (Smoke/CO/Leak)", [
-    "smoke","smoke alarm","co","co2","carbon monoxide","co alarm","leak","water leak",
-    "gas leak","lpg","methane","flood","moisture","detector","sensor","nest protect",
-    "kidde","first alert","sirene","test alarm","low battery","safety","fire","heat",
-    "temperature rise","hazard","valve shutoff","water shutoff","drip","overflow"
-  ]],
-  ["Presence & Occupancy", [
-    "presence","occupancy","person","people","zone","proximity","geofence","ibeacon",
-    "bluetooth","ble","wifi presence","device tracker","gps","room-assistant","espresense",
-    "face detect","arrival","depart","enter","leave","home","away","work","school",
-    "guest","visitor","motion occupied","unoccupied","away mode"
-  ]],
-  ["Access & Locks", [
-    "lock","unlock","door lock","deadbolt","smart lock","code","pin","rfid","nfc",
-    "keypad","garage door","gate","opener","yale","schlage","kwikset","august lock",
-    "nuki","danalock","tuya lock","bolt","latch","auto lock","auto unlock","door sensor",
-    "strike","intercom","access control","entry system"
-  ]],
-  ["Cameras & Vision", [
-    "camera","nvr","cctv","rtsp","onvif","snapshot","image","doorbell","ipc","ptz",
-    "frigate","scrypted","motioneye","blue iris","zoneminder","recording","clip",
-    "detect","object","person detect","face","license plate","frame","stream","ffmpeg",
-    "unifi","protect","ubiquiti","dahua","hikvision","reolink","wyze","arlo","ring",
-    "eufy","amcrest","blink","tp-link","tapo","annke"
-  ]],
-  ["Media & Entertainment", [
-    "media","music","tv","video","speaker","sound","volume","playlist","radio","cast",
-    "chromecast","airplay","dlna","sonos","spotify","plex","kodi","jellyfin","emby",
-    "apple tv","android tv","fire tv","avr","denon","marantz","yamaha","soundbar",
-    "tunein","mpd","homepod","spotify connect","now playing"
-  ]],
-  ["AI & Assistants", [
-    "assistant","voice","tts","stt","wake word","hotword","whisper","faster-whisper",
-    "piper","coqui","azure tts","google tts","rasa","rhasspy","wyoming","openwakeword",
-    "porcupine","snowboy","llm","ai","chatgpt","openai","groq","llama","mistral",
-    "gpt","claude","intent","conversation","assist","pipeline","microphone","speaker"
-  ]],
-  ["Announcements & Notifications", [
-    "notification","announce","announcement","alert","message","notify","push","email",
-    "smtp","sms","twilio","mobile_app","html5","pushover","pushbullet","pushcut",
-    "telegram","discord","matrix","slack","gotify","ntfy","webhook","call","tts notify",
-    "rich text","priority","rate limit","digest"
-  ]],
-  ["Energy & Power", [
-    "energy","power","kwh","consumption","production","solar","pv","panel","inverter",
-    "battery","soc","grid","tariff","peak","offpeak","smart plug","meter","shelly",
-    "sonoff pow","ct clamp","victron","fronius","growatt","solis","goodwe","tesla",
-    "powerwall","charger","ev","wallbox","zappi","influx","efficiency"
-  ]],
-  ["Environment & Weather", [
-    "weather","forecast","rain","wind","sun","uv","aqi","air quality","humidity",
-    "pressure","barometer","dew point","temperature","lightning","pollen","cloud",
-    "visibility","storm","openweather","met.no","pirateweather","accuweather",
-    "season","sunrise","sunset","moon","environment","outdoor","sensor","index"
-  ]],
-  ["Appliances & Utilities", [
-    "appliance","washer","washing machine","dryer","dishwasher","vacuum","robot vacuum",
-    "roborock","dreame","deebot","mop","kitchen","oven","stove","range","microwave",
-    "kettle","coffee","coffee maker","espresso","fridge","freezer","humidifier",
-    "dehumidifier","air purifier","fan","heater","water heater","pump","ir blaster"
-  ]],
-  ["Scheduling & Scenes", [
-    "schedule","timer","delay","cooldown","interval","calendar","holiday","weekday",
-    "weekend","sunset","sunrise","golden hour","offset","automation mode","scene",
-    "script","mode","sleep","night","morning","bedtime","quiet hours","do not disturb",
-    "repeat","cron","window","time range","period","duration"
-  ]],
-  ["System & Maintenance", [
-    "system","maintenance","backup","restore","snapshot","supervisor","addon","hassio",
-    "update","upgrade","restart","reboot","watchdog","ping","uptime","health",
-    "recorder","database","purge","logbook","template","mqtt","zha","zigbee","zwave",
-    "integration","device","entity","automation","debug"
-  ]],
-  ["Other", []]
-];
-const TAG_ORDER = TAG_DEFS.map(([name]) => name);
-
-/* ---------- opener (import & forum redirect safety) ---------- */
+/* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
 function openExternal(url){
   try{
     const w = window.open("", "_blank");
     if (w) {
       try { w.opener = null; } catch {}
-      const safe = String(url).replace(/"/g,"&quot;");
-      w.document.write(`<!doctype html><meta charset="utf-8"><title>Opening…</title>
-        <style>html,body{height:100%}body{display:grid;place-items:center;font:14px system-ui}</style>
+      const safe = String(url).replace(/"/g, "&quot;");
+      w.document.write(`<!doctype html><meta charset="utf-8">
+        <title>Opening…</title>
+        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
+        a{color:#06c;font-weight:700}</style>
         <p>Opening… If nothing happens <a href="${safe}">click here</a>.</p>
         <meta http-equiv="refresh" content="0; url='${safe}'">`);
       try { w.location.href = url; } catch {}
-      return;
+      return true;
     }
-  }catch{}
-  location.assign(url);
+  } catch {}
+  try { window.top.location.assign(url); } catch { location.assign(url); }
+  return false;
 }
 
-/* ---------- text utils ---------- */
-const ACRONYM = /\b([A-Z0-9]{2,})\b/g;
-const LEAD_EMOJI = /^[\p{Emoji_Presentation}\p{Emoji}\uFE0F\u200D]+/u;
-function titleCasePreserveAcronyms(s){
-  const keep = {};
-  s.replace(ACRONYM, (m)=> (keep[m.toLowerCase()] = m));
-  const t = s.toLowerCase().replace(/\b([a-z])/g, m=>m.toUpperCase());
-  return t.replace(/\b([a-z0-9]+)\b/gi, (m)=> keep[m.toLowerCase()] ?? m);
-}
-function normalizeTitle(raw){
-  let t = (raw||"").replace(/\[ ?blueprint ?\]/i,"").replace(LEAD_EMOJI,"").trim();
-  // allow parentheses but strip stray punctuation
-  t = t.replace(/[^\w\s()\-:]/g, "");
-  t = titleCasePreserveAcronyms(t).replace(/\s{2,}/g," ");
-  return t;
-}
-function likeFmt(n){
-  if (!n || n<0) return "0";
-  if (n>=1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}M`;
-  if (n>=1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
-  return String(n);
-}
+/* ---------- curated tags (expanded) ---------- */
+const TAG_DEFS = [
+  ["Lighting", ["light","lights","illumin","led","bulb","hue","lifx","nanoleaf","philips hue"]],
+  ["Climate & Ventilation", ["temp","climate","hvac","thermostat","heating","cooling","ventilation","fan","radiator","ecobee","nest","tado","aqara thermostat"]],
+  ["Security & Alarm", ["alarm","armed","disarm","siren","intrusion","security system"]],
+  ["Safety (Smoke/CO/Leak)", ["smoke","co2","carbon monoxide","leak","water leak","gas leak","detector"]],
+  ["Presence & Occupancy", ["presence","occupancy","person","people","zone","proximity","geofence"]],
+  ["Access & Locks", ["lock","unlock","door lock","deadbolt","nuki","august lock","yale lock","schlage"]],
+  ["Cameras & Vision", [
+    "camera","nvr","cctv","rtsp","onvif","snapshot","image","doorbell",
+    // brands
+    "unifi","protect","ubiquiti","dahua","hikvision","reolink","wyze","arlo","ring","eufy","amcrest","blink","tp-link","tapo","annke"
+  ]],
+  ["Media & Entertainment", ["media","spotify","plex","kodi","chromecast","tv","music","speaker","sound"]],
+  ["AI & Assistants", ["assistant","voice","llm","openai","ai","chatgpt","groq","tts","stt","whisper","piper","rhasspy","wyoming"]],
+  ["Announcements & Notifications", ["notification","announce","alert","message","telegram","discord","pushover","notify"]],
+  ["Energy & Power", ["energy","power","kwh","electric","solar","pv","ev","charger","inverter","battery"]],
+  ["Environment & Weather", ["weather","forecast","rain","wind","sun","uv","aqi","air quality","environment"]],
+  ["Appliances & Utilities", ["appliance","washer","dryer","dishwasher","vacuum","robot","roomba","mop","kitchen","oven","coffee"]],
+  ["Scheduling & Scenes", ["schedule","timer","scene","mode","sleep","night","morning","bedtime"]],
+  ["System & Maintenance", ["system","backup","restart","maintenance","update","health"]],
+  ["Other", []]
+];
+const TAG_ORDER = TAG_DEFS.map(([name])=> name);
 
-/* ---------- tag inference ---------- */
-const TAG_LOOKUP = TAG_DEFS.reduce((m,[name,keys])=>{
-  m[name] = keys.map(k=>k.toLowerCase());
-  return m;
-}, {});
+/* resolve tag (bucket) by scanning text */
+function inferBucket(item){
+  // Use server bucket if solid (not empty/other); else infer.
+  const fromServer = (item.bucket||"").toString().trim();
+  if (fromServer && fromServer.toLowerCase() !== "other") return fromServer;
 
-function inferTagsFromText(text){
-  const hay = (text||"").toLowerCase();
-  const hit = new Set();
-  for (const [name, keys] of Object.entries(TAG_LOOKUP)){
-    if (name === "Other") continue;
-    for (const k of keys){ if (hay.includes(k)) { hit.add(name); break; } }
+  const hay = [
+    (item.title||""), (item.excerpt||""), (item.author||""),
+    ...(item.tags||[])
+  ].join(" ").toLowerCase();
+
+  for (const [name, words] of TAG_DEFS){
+    if (!words.length) continue;
+    for (const w of words){
+      if (hay.includes(w.toLowerCase())) return name;
+    }
   }
-  if (!hit.size) hit.add("Other");
-  return Array.from(hit);
-}
-function mergeTags(item){
-  const base = Array.isArray(item.tags) ? [...item.tags] : [];
-  const auto = inferTagsFromText(`${item.title} ${item.excerpt} ${base.join(" ")}`);
-  const all = new Set([...base, ...auto]);
-  item._tags = Array.from(all);
+  return "Other";
 }
 
-/* ---------- description cook/expand ---------- */
-function setPostHTML(container, html){
+/* ---------- tokens + scoring for search ---------- */
+function tokenize(s){
+  return (s||"")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter(Boolean);
+}
+function scoreItem(item, tokens){
+  if (!tokens.length) return 0;
+  const title = (item.title||"").toLowerCase();
+  const text  = (item.excerpt||"").toLowerCase();
+  const tags  = (item.tags||[]).join(" ").toLowerCase();
+  let score = 0;
+  for (const t of tokens){
+    if (title.includes(t)) score += 2;
+    if (text.includes(t))  score += 1;
+    if (tags.includes(t))  score += 1;
+  }
+  return score;
+}
+
+/* ---------- tags dropdown ---------- */
+function populateTagsMenu(){
+  const tagmenu = $("#tagmenu");
+  tagmenu.innerHTML = "";
+  const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
+  tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
+  TAG_ORDER.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
+}
+
+/* ---------- forum redirect (to avoid blocked opener) ---------- */
+function rewriteToRedirect(href){
+  try{
+    const u = new URL(href);
+    if (u.hostname !== "community.home-assistant.io") return null;
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("t");
+    if (idx === -1) return null;
+    let slug = "", id = "";
+    if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) { id = parts[idx+1]; }
+    else { slug = (parts[idx+1] || ""); id = (parts[idx+2] || "").replace(/[^0-9]/g, ""); }
+    if (!id) return null;
+    const qs = new URLSearchParams({ tid: id, slug }).toString();
+    return `${API}/go?${qs}`;
+  }catch{ return null; }
+}
+
+/* ---------- creators spotlight ---------- */
+const creators = {
+  container: $("#creators"),
+  popAuthor: $("#c_pop_author"),
+  popTitle: $("#c_pop_title"),
+  upAuthor:  $("#c_up_author"),
+  upCount:   $("#c_up_count"),
+  rAuthor:   $("#c_recent_author"),
+  rTitle:    $("#c_recent_title"),
+  loading:   $("#creators-loading"),
+  show(){ this.container.style.display = ""; },
+  hide(){ this.container.style.display = "none"; },
+  setLoading(on){ this.loading.style.display = on ? "inline-block" : "none"; }
+};
+
+/* ---------- single-desc renderer + CTA analyzer ---------- */
+function setPostHTMLInto(container, html, ctaEl){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // make external import badges compact pills that open in new tab
-  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    a.classList.add("myha-inline");
+  // Make all community links open via redirect
+  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
+    const redir = rewriteToRedirect(a.getAttribute("href"));
+    if (redir) a.setAttribute("href", redir);
   });
-
-  // Intercept open
-  tmp.addEventListener("click", (ev)=>{
-    const a = ev.target.closest('a[href^="http"]');
-    if (!a) return;
-    a.target = "_blank";
-  });
+  // Detect multiple MyHA import badges -> convert CTA to "View description"
+  const importLinks = tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]');
+  if (ctaEl){
+    if (importLinks.length > 1) {
+      ctaEl.classList.add("gray");
+      ctaEl.querySelector(".cta-text").textContent = "View description";
+      ctaEl.dataset.forceView = "1";
+    } else {
+      ctaEl.classList.remove("gray");
+      ctaEl.querySelector(".cta-text").textContent = "Import to Home Assistant";
+      delete ctaEl.dataset.forceView;
+    }
+  }
 
   container.innerHTML = "";
   container.appendChild(tmp);
 }
 
-/* ---------- cache ---------- */
+/* ---------- card renderer ---------- */
 const detailCache = new Map();
 
-/* ---------- render card ---------- */
+function likePill(likes){
+  if (likes == null) return "";
+  const fmt = (v)=> v>=1_000_000 ? `${(v/1_000_000).toFixed(1).replace(/\.0$/,"")}M`
+                     : v>=1_000   ? `${(v/1_000).toFixed(1).replace(/\.0$/,"")}k`
+                     : `${v}`;
+  return `<span class="stat-pill"><span class="icon-heart"></span><span>${fmt(likes)}</span><span class="liked-text">Liked This</span></span>`;
+}
+
+function tagPills(tags){
+  const set = [];
+  (tags || []).forEach(t => { const v=(t||"").toString().trim(); if (v && !set.includes(v)) set.push(v); });
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+}
+
+function importButton(href){
+  return `
+    <a class="myha-btn cta" data-open="${esc(href)}">
+      <sl-icon name="house"></sl-icon>
+      <span class="cta-text">Import to Home Assistant</span>
+    </a>`;
+}
+
 function renderCard(it){
-  mergeTags(it);
+  // Normalize / enrich
+  const bucket = inferBucket(it);
+  const tags = [bucket, ...(it.tags||[])];
 
   const el = document.createElement("article");
   el.className = "card";
 
-  const niceTitle = normalizeTitle(it.title);
-  const likes = it.likes ?? it.like_count ?? it.favorites ?? 0;
-
+  const descShort = esc(it.excerpt || "");
   el.innerHTML = `
-    <header class="card__head">
-      <h3 class="card__title">${esc(niceTitle)}</h3>
+    <div class="row">
+      <h3>${esc(it.title)}</h3>
       ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
-    </header>
+      ${likePill(it.likes)}
+    </div>
+    <div class="tags">${tagPills(tags)}</div>
 
-    <div class="tags">${(it._tags||[]).slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
-
-    <div class="desc-wrap">
-      <p class="desc">${esc(it.excerpt||"")}</p>
-      <button class="readmore" type="button">Read more</button>
-      <div class="more" hidden id="more-${it.id}"></div>
+    <div class="desc-wrap" id="desc-${it.id}">
+      <div class="desc-inner">${descShort}</div>
     </div>
 
-    <footer class="card__foot">
-      <div class="likepill" title="People who clicked ❤️ on the forum">
-        <span class="icon-heart"></span>
-        <span class="num">${likeFmt(likes)}</span>
-        <span class="lbl">Liked This</span>
-      </div>
-      ${
-        it.import_url
-        ? `<a class="myha-btn" data-open="${esc(it.import_url)}">
-             <span class="myha-icon"></span>
-             Import to Home Assistant
-           </a>`
-        : `<button class="myha-btn neutral" type="button" data-toggle="1">View description</button>`
-      }
-    </footer>
+    <div class="toggle" data-id="${it.id}">Read more</div>
+
+    <div class="card__footer">
+      <div></div>
+      ${importButton(it.import_url)}
+    </div>
   `;
 
-  // open import (no target="_blank" blocking issues)
-  el.addEventListener("click", (ev)=>{
-    const opener = ev.target.closest("[data-open]");
-    if (opener){ ev.preventDefault(); openExternal(opener.getAttribute("data-open")); }
-  });
+  const descWrap = el.querySelector(`#desc-${it.id}`);
+  const descInner = el.querySelector(`#desc-${it.id} .desc-inner`);
+  const toggle    = el.querySelector(".toggle");
+  const ctaBtn    = el.querySelector(".cta");
 
-  // expand logic
-  const descWrap = el.querySelector(".desc-wrap");
-  const more     = el.querySelector(`#more-${it.id}`);
-  const btn      = el.querySelector(".readmore");
-  let expanded   = false;
-
-  async function ensureLoaded(){
-    if (detailCache.has(it.id)) return;
-    const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-    detailCache.set(it.id, data.cooked || "");
-  }
-  async function expand(){
+  let expanded = false;
+  async function expandNow(){
     if (expanded) return;
     expanded = true;
-    btn.textContent = "Less";
-    descWrap.classList.add("open");
-    if (!detailCache.has(it.id)) {
-      btn.disabled = true;
-      try {
-        await ensureLoaded();
-      } finally {
-        btn.disabled = false;
+    toggle.style.pointerEvents = "none";
+    try{
+      if (!detailCache.has(it.id)) {
+        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+        detailCache.set(it.id, data.cooked || "");
       }
+      setPostHTMLInto(descInner, detailCache.get(it.id), ctaBtn);
+      descWrap.classList.add("expanded");
+      toggle.textContent = "Less";
+    }catch(e){
+      setPostHTMLInto(descInner, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`, ctaBtn);
+      descWrap.classList.add("expanded");
+      toggle.textContent = "Less";
+    }finally{
+      toggle.style.pointerEvents = "";
     }
-    setPostHTML(more, detailCache.get(it.id));
-    more.hidden = false;
   }
-  function collapse(){
-    if (!expanded) return;
+  function collapseNow(){
     expanded = false;
-    btn.textContent = "Read more";
-    descWrap.classList.remove("open");
-    more.hidden = true;
+    descWrap.classList.remove("expanded");
+    descInner.textContent = it.excerpt || "";
+    toggle.textContent = "Read more";
+    // If we forced CTA into gray "View description", keep it gray (user asked to not change behavior on collapse)
   }
 
-  btn.addEventListener("click", ()=> expanded ? collapse() : expand());
-  // double-click anywhere on the card toggles
-  el.addEventListener("dblclick", (e)=>{
-    // ignore dblclicks on links/buttons inside footer to avoid accidental opens
-    if (e.target.closest(".card__foot a,[data-open]")) return;
-    expanded ? collapse() : expand();
+  toggle.addEventListener("click", ()=> expanded ? collapseNow() : expandNow());
+
+  // Double-click anywhere on card toggles description
+  el.addEventListener("dblclick", (ev)=>{
+    const inFooter = ev.target.closest(".card__footer");
+    if (inFooter) return; // ignore double click on footer/CTA
+    expanded ? collapseNow() : expandNow();
+  });
+
+  // Intercept CTA
+  el.addEventListener("click", (ev)=>{
+    const opener = ev.target.closest("[data-open]");
+    if (!opener) return;
+    ev.preventDefault();
+    // If CTA was forced into "View description", just expand
+    if (opener.classList.contains("cta") && opener.dataset.forceView === "1") {
+      expandNow();
+      return;
+    }
+    openExternal(opener.getAttribute("data-open"));
   });
 
   return el;
 }
 
-/* ---------- creator spotlight ---------- */
-function normalizeAuthor(a){ return (a||"").trim() || "Unknown"; }
+/* ---------- data loading & UI glue ---------- */
+const list     = $("#list");
+const empty    = $("#empty");
+const errorB   = $("#error");
+const searchEl = $("#search");
+const sortSel  = $("#sort");
+const tagdd    = $("#tagdd");
+const tagbtn   = $("#tagbtn");
+const tagmenu  = $("#tagmenu");
+const refreshBtn = $("#refresh");
+const sentinel = $("#sentinel");
+const headingEl = $("#headingEl");
 
-function computeSpotlight(items){
-  const out = {
-    popular: null,       // highest likes
-    mostUploaded: null,  // { author, count }
-    recent: null         // newest by created
-  };
+populateTagsMenu();
 
-  // popular
-  out.popular = items.reduce((best, it)=>{
-    const likes = it.likes ?? it.like_count ?? 0;
-    return (!best || likes > (best.likes ?? 0)) ? it : best;
-  }, null);
+let page = 0;
+let loading = false;
+let hasMore = true;
 
-  // most uploaded (by author)
+let sort   = "likes";  // likes | new | title
+let bucket = "";       // tag filter
+let q      = "";       // search query tokens
+let allItems = [];     // cache of all loaded items for spotlight/search
+
+function setError(msg){ errorB.style.display="block"; errorB.textContent = msg; }
+function clearError(){ errorB.style.display="none"; errorB.textContent = ""; }
+
+function updateHeading(){
+  const parts = [];
+  if (sort === "likes") parts.push("Most liked blueprints");
+  else if (sort === "new") parts.push("Newest blueprints");
+  else parts.push("All blueprints");
+
+  if (q) parts.push(`• query: “${q}”`);
+  if (bucket) parts.push(`• tag: ${bucket}`);
+
+  headingEl.textContent = parts.join(" ");
+}
+
+/* server page fetch */
+async function fetchPage(p){
+  const url = new URL(`${API}/blueprints`, location.origin);
+  url.searchParams.set("page", String(p));
+  // We avoid server-side title filtering; we load + client-filter for title+descr combos
+  url.searchParams.set("sort", sort);
+  if (bucket) url.searchParams.set("bucket", bucket);
+  return await fetchJSON(url.toString());
+}
+
+/* Spotlight (after all pages loaded) */
+function buildSpotlight(items){
+  if (!items.length) { creators.hide(); return; }
+
+  // Most popular blueprint
+  const byLikes = [...items].sort((a,b)=>(b.likes||0)-(a.likes||0));
+  const popular = byLikes[0];
+
+  // Most uploaded blueprints (author with most blueprints)
   const byAuthor = new Map();
   for (const it of items){
-    const a = normalizeAuthor(it.author);
-    byAuthor.set(a, (byAuthor.get(a)||0)+1);
+    if (!it.author) continue;
+    byAuthor.set(it.author, (byAuthor.get(it.author)||0)+1);
   }
-  let maxA=null, maxC=0;
-  for (const [a,c] of byAuthor){ if (c>maxC){ maxC=c; maxA=a; } }
-  out.mostUploaded = { author:maxA||"Unknown", count:maxC };
-
-  // recent
-  out.recent = items.slice().sort((a,b)=> (b.created_ts||0)-(a.created_ts||0))[0] || null;
-
-  return out;
-}
-function renderSpotlight(sp){
-  const root = $("#spot");
-  if (!root) return;
-
-  const slot = (title, author, body) => `
-    <div class="contrib-card">
-      <div class="contrib-head">${esc(title)}</div>
-      <div class="contrib-sub">${esc(author||"")}</div>
-      <div class="contrib-body">${body}</div>
-    </div>`;
-
-  const popBody = sp.popular
-    ? `<div class="contrib-chip">${esc(normalizeTitle(sp.popular.title))}</div>`
-    : `<em>—</em>`;
-  const upBody = `<div class="contrib-chip">${sp.mostUploaded?.count||0} Blueprints</div>`;
-  const recBody = sp.recent
-    ? `<div class="contrib-chip">${esc(normalizeTitle(sp.recent.title))}</div>`
-    : `<em>—</em>`;
-
-  root.innerHTML = `
-    ${slot("Most Popular Blueprint", sp.popular?.author||"—", popBody)}
-    ${slot("Most Uploaded Blueprints", sp.mostUploaded?.author||"—", upBody)}
-    ${slot("Most Recent Upload", sp.recent?.author||"—", recBody)}
-  `;
-}
-
-/* ---------- list rendering ---------- */
-function appendItems(target, items){
-  const frag = document.createDocumentFragment();
-  for (const it of items) frag.appendChild(renderCard(it));
-  target.appendChild(frag);
-}
-
-/* ---------- search/sort/filter ---------- */
-function tokenize(q){
-  return (q||"").toLowerCase()
-    .replace(/[^\p{L}\p{N}\s-]/gu," ")
-    .split(/\s+/).filter(Boolean);
-}
-function scoreItem(it, tokens){
-  if (!tokens.length) return 0;
-  const hayTitle = (it.title||"").toLowerCase();
-  const hayEx    = (it.excerpt||"").toLowerCase();
-  const hayTags  = (it._tags||[]).join(" ").toLowerCase();
-  let s = 0;
-  for (const t of tokens){
-    if (hayTitle.includes(t)) s += 3;
-    if (hayEx.includes(t))    s += 2;
-    if (hayTags.includes(t))  s += 2;
-  }
-  return s;
-}
-function applySort(items, mode, tokens){
-  if (mode==="likes"){
-    items.sort((a,b)=> (b.likes??b.like_count??0) - (a.likes??a.like_count??0));
-  } else if (mode==="title"){
-    items.sort((a,b)=> normalizeTitle(a.title).localeCompare(normalizeTitle(b.title)));
-  } else {
-    items.sort((a,b)=> (b.created_ts||0)-(a.created_ts||0));
-  }
-  // If tokens present, re-rank by score keeping sort as tie-breaker
-  if (tokens.length){
-    items.forEach(it => it._score = scoreItem(it, tokens));
-    items.sort((a,b)=> (b._score - a._score) || items.indexOf(a)-items.indexOf(b));
-  }
-}
-
-/* ---------- dynamic heading ---------- */
-function setHeading(sort, tag, tokens){
-  const h = $("#heading");
-  if (!h) return;
-  const base = sort==="likes" ? "Most liked blueprints"
-             : sort==="title" ? "A–Z blueprints"
-             : "Newest blueprints";
-  const parts = [base];
-  if (tag) parts.push(`• tag: “${tag}”`);
-  if (tokens.length) parts.push(`• query: “${tokens.join(" ")}”`);
-  h.textContent = parts.join(" ");
-}
-
-/* ---------- boot ---------- */
-function boot(){
-  const list   = $("#list");
-  const empty  = $("#empty");
-  const errorB = $("#error");
-  const search = $("#search");
-  const sortSel= $("#sort");
-  const refreshBtn = $("#refresh");
-  const tagdd  = $("#tagdd");
-  const tagbtn = $("#tagbtn");
-  const tagmenu= $("#tagmenu");
-
-  if (!list) return;
-
-  let page     = 0;
-  let hasMore  = true;
-  let loading  = false;
-  let q        = "";
-  let sort     = "likes"; // default Most liked
-  let bucket   = "";
-
-  const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
-  const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
-
-  async function fetchFilters(){
-    try{
-      const data = await fetchJSON(`${API}/filters`);
-      const tags = Array.isArray(data.tags) ? data.tags : [];
-      // Merge API tags with curated order
-      const merged = Array.from(new Set(["All tags", ...TAG_ORDER.filter(n=>n!=="Other"), ...tags, "Other"]));
-
-      tagmenu.innerHTML = "";
-      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
-      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
-      merged.filter(t=>t!=="All tags").forEach(t=> tagmenu.insertAdjacentHTML("beforeend", mk(t,t)));
-
-      tagmenu.addEventListener("sl-select", async (ev)=>{
-        bucket = ev.detail.item.value || "";
-        tagbtn.textContent = bucket || "All tags";
-        await loadAll(true);
-      }, { once:true }); // attach once; Shoelace re-fires internally
-      // reattach on each open to be safe
-      tagdd.addEventListener("sl-show", ()=>{
-        // ensure the current selection is highlighted
-        const current = tagmenu.querySelector(`[value="${bucket}"]`);
-        if (current) current.setAttribute("checked","");
-      });
-    }catch(e){ /* optional */ }
+  let upName = ""; let upCount = 0;
+  for (const [name,count] of byAuthor.entries()){
+    if (count > upCount) { upName = name; upCount = count; }
   }
 
-  function urlFor(p){
-    const url = new URL(`${API}/blueprints`, location.origin);
-    url.searchParams.set("page", String(p));
-    url.searchParams.set("sort", sort);
-    if (bucket) url.searchParams.set("bucket", bucket);
-    // server search kept light; we do heavy client side ranking
-    if (q) url.searchParams.set("q_title", q);
-    return url.toString();
-  }
+  // Most recent upload (sort by server 'created' if present, else id as fallback)
+  const byRecent = [...items].sort((a,b)=>{
+    const at = (a.created_ts || a.created || a.updated_ts || a.updated || 0);
+    const bt = (b.created_ts || b.created || b.updated_ts || b.updated || 0);
+    if (at && bt) return bt - at;
+    return String(b.id).localeCompare(String(a.id));
+  });
+  const recent = byRecent[0];
 
-  async function loadPage(p){
-    const data = await fetchJSON(urlFor(p));
-    const items = data.items || [];
-    hasMore = !!data.has_more;
-    return items;
-  }
+  // Fill
+  creators.popAuthor.textContent = popular?.author || "—";
+  creators.popTitle.textContent  = popular?.title  || "—";
 
-  async function loadAll(resetHeading=false){
-    if (loading) return;
-    loading = true; clearError();
-    try{
-      page = 0; hasMore = true;
+  creators.upAuthor.textContent  = upName || "—";
+  creators.upCount.textContent   = upCount ? `${upCount} Blueprints` : "—";
+
+  creators.rAuthor.textContent   = recent?.author || "—";
+  creators.rTitle.textContent    = recent?.title  || "—";
+
+  creators.setLoading(false);
+  creators.show();
+}
+
+/* load page -> list */
+async function load(initial=false){
+  if (loading || (!hasMore && !initial)) return;
+  loading = true; clearError();
+  try{
+    const data = await fetchPage(page);
+    const items = (data.items || []).map(x=> ({...x, bucket: inferBucket(x)}));
+
+    if (initial){
       list.innerHTML = "";
-      empty.style.display = "none";
-
-      const spinner = $("#spot-spinner");
-      if (spinner) spinner.hidden = false;
-
-      // collect all pages
-      const all = [];
-      while (hasMore){
-        const items = await loadPage(page);
-        items.forEach(mergeTags);
-        all.push(...items);
-        page += 1;
-        await sleep(10);
-      }
-
-      // client-search + sort
-      const tokens = tokenize(q);
-      const filtered = all.filter(it => {
-        if (bucket && !(it._tags||[]).includes(bucket)) return false;
-        if (!tokens.length) return true;
-        return scoreItem(it, tokens) > 0;
-      });
-
-      applySort(filtered, sort, tokens);
-      appendItems(list, filtered);
-
-      empty.style.display = filtered.length ? "none" : "block";
-      if (resetHeading) setHeading(sort, bucket, tokens);
-
-      // spotlight
-      const sp = computeSpotlight(all);
-      renderSpotlight(sp);
-      if (spinner) spinner.hidden = true;
-    }catch(e){
-      setError(`Failed to load: ${String(e.message||e)}`);
-    }finally{
-      loading = false;
+      empty.style.display = items.length ? "none" : "block";
+      // Also reset spotlight loader state
+      creators.setLoading(true);
+      creators.show();
     }
-  }
 
-  // events
-  if (search){
-    const onSearch = debounce(async ()=>{
-      q = (search.value||"").trim();
-      await loadAll(true);
-    }, 250);
-    search.addEventListener("sl-input", onSearch);
-    search.addEventListener("sl-clear", onSearch);
-  }
-  if (sortSel){
-    sortSel.addEventListener("sl-change", async ()=>{
-      const v = sortSel.value;
-      sort = v==="likes"||v==="title"||v==="new" ? v : "likes";
-      await loadAll(true);
-    });
-  }
-  if (refreshBtn){
-    refreshBtn.addEventListener("click", async ()=>{ await loadAll(true); });
-  }
+    // Keep a copy for client-side searching and spotlight
+    allItems.push(...items);
 
-  fetchFilters();
-  setHeading(sort, bucket, []);
-  loadAll(true);
+    // Client-side filter by query tokens over title + excerpt + tags
+    let view = items;
+    if (q){
+      const toks = tokenize(q);
+      view = items
+        .map(it => ({ it, s: scoreItem(it, toks) }))
+        .filter(x => x.s > 0)
+        .sort((a,b)=> b.s - a.s)
+        .map(x => x.it);
+    }
+
+    // Append cards
+    for (const it of view) list.appendChild(renderCard(it));
+
+    hasMore = !!data.has_more;
+    page += 1;
+
+    // If we’ve loaded everything, compute spotlight
+    if (!hasMore) buildSpotlight(allItems);
+  }catch(e){
+    setError(`Failed to load: ${String(e.message||e)}`);
+  }finally{
+    loading = false;
+  }
 }
 
+/* load ALL for search refresh (keeps sort, bucket) */
+async function loadAllFresh(){
+  // reset
+  page = 0; hasMore = true; list.innerHTML = ""; clearError();
+  allItems = []; creators.setLoading(true); creators.show();
+  let first = true;
+  while (hasMore) {
+    await load(first); first = false;
+    await wait(6);
+  }
+}
+
+/* search + filters */
+if (searchEl){
+  const onSearch = debounce(async ()=>{
+    q = (searchEl.value || "").trim();
+    updateHeading();
+    await loadAllFresh();
+  }, 300);
+  searchEl.addEventListener("sl-input", onSearch);
+  searchEl.addEventListener("sl-clear", onSearch);
+}
+
+if (sortSel){
+  sortSel.addEventListener("sl-change", async ()=>{
+    sort = sortSel.value || "likes";
+    updateHeading();
+    await loadAllFresh();
+  });
+}
+
+if (tagmenu){
+  tagmenu.addEventListener("sl-select", async (ev)=>{
+    bucket = ev.detail.item.value || "";
+    $("#tagbtn").textContent = bucket || "All tags";
+    updateHeading();
+    await loadAllFresh();
+    if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
+  });
+}
+
+if (refreshBtn){
+  refreshBtn.addEventListener("click", loadAllFresh);
+}
+
+/* infinite scroll */
+if (sentinel){
+  const io = new IntersectionObserver((entries)=>{
+    if (entries[0] && entries[0].isIntersecting) load(false);
+  },{ rootMargin:"700px" });
+  io.observe(sentinel);
+}
+
+/* boot */
+function boot(){
+  updateHeading();
+  load(true);
+}
 document.addEventListener("DOMContentLoaded", boot);
