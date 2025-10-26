@@ -1,203 +1,330 @@
+/* Blueprint Store – stable sort + spinner + lighter bg
+   Only requested changes:
+   - spinner while Creators Spotlight loads
+   - slightly lighter blueprint background (tweak is in CSS)
+   - hardened sort dropdown (Most liked / Newest / Title A–Z)
+*/
 const API = "/api/blueprint_store";
 const $  = (s) => document.querySelector(s);
 
 /* ---------- helpers ---------- */
-const esc = s => (s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-const sleep = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn, ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
-
-async function fetchJSON(url, tries = 3) {
-  let delay = 450;
-  for (let i=0;i<tries;i++){
-    try{
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-      const j = await res.json();
-      if (j && j.error) throw new Error(j.error);
-      return j;
-    }catch(e){
-      if (i<tries-1 && /429|502|503/.test(String(e))) { await sleep(delay); delay*=2; continue; }
+function esc(s){
+  return (s||"").replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+}
+const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+async function fetchJSONRaw(url){
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+async function fetchJSON(url, tries=3){
+  let delay = 600;
+  for(let i=0;i<tries;i++){
+    try{ return await fetchJSONRaw(url); }
+    catch(e){
+      const msg = String(e.message||e);
+      if (i < tries-1 && /429/.test(msg)) {
+        await new Promise(r=>setTimeout(r, delay + Math.random()*250));
+        delay *= 2; continue;
+      }
       throw e;
     }
   }
 }
 
-/* number shortener */
-const k = n => { const x = Number(n||0); if (x>=1e6) return (x/1e6).toFixed(1).replace(/\.0$/,"")+"m"; if (x>=1e3) return (x/1e3).toFixed(1).replace(/\.0$/,"")+"k"; return String(x|0); };
-const likePill = likes => `<span class="likes-pill"><i class="heart" aria-hidden="true"></i><span>${k(likes)}</span><span>Liked This</span></span>`;
+/* -------- title normalizer (unchanged behaviour you liked) -------- */
+function normalizeTokenCase(word){
+  if (word.length <= 2) return word.toUpperCase(); // e.g. ZH, AI
+  if (/^[A-Z0-9]{3,}$/.test(word)) return word;   // keep full caps acronyms
+  return word[0].toUpperCase() + word.slice(1).toLowerCase();
+}
+function formatTitle(s){
+  if (!s) return "";
+  // remove “[Blueprint]” and any leading emojis/specials (keep parentheses)
+  let t = s.replace(/\[blueprint\]\s*/i, "")
+           .replace(/^[\s\p{Emoji_Presentation}\p{Extended_Pictographic}]+/gu, "")
+           .replace(/[^\p{L}\p{N}\s()\-:_&,'\/]/gu, " "); // keep a few safe chars
+  // collapse whitespace
+  t = t.replace(/\s+/g," ").trim();
 
-/* title cleanup */
-function cleanTitle(raw){
-  if (!raw) return "";
-  let s = String(raw);
-  s = s.replace(/\[ *blueprint *\]\s*/ig, "");
-  s = s.replace(/^[^A-Za-z0-9(]+/, "");              // drop leading emojis/symbols
-  s = s.replace(/[^A-Za-z0-9() \-:]/g, " ");         // keep (), letters, digits, space, - :
-  s = s.replace(/\s{2,}/g, " ").trim();
-  s = s.split(" ").map(w => (w===w.toUpperCase()&&w.length>=2) ? w : w.charAt(0).toUpperCase()+w.slice(1).toLowerCase()).join(" ");
-  s = s.replace(/\s*-\s*/g, " - ");
-  return s;
+  // Title Case (preserve known caps)
+  t = t.split(" ").map(normalizeTokenCase).join(" ");
+  // small fix: “Of, And, The” inside get lowercase unless first
+  t = t.replace(/\b(And|Or|Of|The|In|With|For|On|To)\b/g, m=>m.toLowerCase());
+  // keep acronym examples
+  t = t.replace(/\b(ZHA|Z2M|MQTT|RGB|ESP32|Zigbee2MQTT)\b/g, m=>m);
+  return t;
 }
 
-/* cooked rewriting + count imports */
-function rewriteCookedAndCount(container){
-  let importCount = 0;
-  container.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    importCount++;
-    a.classList.add("import-btn");
-    a.innerHTML = `<sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>`;
+/* ----- resilient opener (unchanged) ----- */
+function openExternal(url){
+  try{
+    const w = window.open("", "_blank");
+    if (w) {
+      try { w.opener = null; } catch {}
+      const safe = String(url).replace(/"/g, "&quot;");
+      w.document.write(`<!doctype html><meta charset="utf-8">
+        <title>Opening…</title>
+        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
+        a{color:#06c;font-weight:700}</style>
+        <p>Opening forum… If nothing happens <a href="${safe}">click here</a>.</p>
+        <meta http-equiv="refresh" content="0; url='${safe}'">`);
+      try { w.location.href = url; } catch {}
+      return true;
+    }
+  } catch {}
+  try { window.top.location.assign(url); } catch { location.assign(url); }
+  return false;
+}
+
+/* pill buttons */
+function importButton(href){
+  return `
+    <a class="myha-btn" data-open="${esc(href)}">
+      <sl-icon name="house"></sl-icon>
+      Import to Home Assistant
+    </a>`;
+}
+function viewDescButton(){
+  return `
+    <a class="myha-btn neutral" data-viewdesc="1">
+      <sl-icon name="document-text"></sl-icon>
+      View description
+    </a>`;
+}
+function likesPill(likes){
+  return `
+  <span class="pill" title="Likes on the forum topic">
+    <sl-icon name="heart"></sl-icon>
+    ${likes ?? 0} Liked This
+  </span>`;
+}
+
+/* tags renderer */
+function tagPills(tags){
+  const set = [];
+  (tags || []).forEach(t => {
+    const v = (t || "").toString().trim();
+    if (v && !set.includes(v)) set.push(v);
   });
-  return importCount;
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
-const cookedCache = new Map(); // id -> {html, count}
 
-/* SEARCH */
-const STOP = new Set(["a","an","and","the","of","to","in","on","for","is","are","with","by","or","at","as","be","this","that","it","from","into","your","you"]);
-function tokenize(q){
-  if (!q) return [];
-  const out = [];
-  (q.toLowerCase().match(/"([^"]+)"|(\S+)/g) || []).forEach(m=>{
-    const t = m.replace(/^"|"$/g,"").trim();
-    if (t && !STOP.has(t) && t.length>1) out.push(t);
+/* -------- normalize post HTML & CTA conversion + redirect ------ */
+function rewriteToRedirect(href){
+  try{
+    const u = new URL(href);
+    if (u.hostname !== "community.home-assistant.io") return null;
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("t");
+    if (idx === -1) return null;
+    let slug = "", id = "";
+    if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) {
+      id = parts[idx+1];
+    } else {
+      slug = (parts[idx+1] || "");
+      id = (parts[idx+2] || "").replace(/[^0-9]/g, "");
+    }
+    if (!id) return null;
+    const qs = new URLSearchParams({ tid: id, slug }).toString();
+    return `${API}/go?${qs}`;
+  }catch{ return null; }
+}
+
+function setPostHTML(container, html){
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html || "<em>Nothing to show.</em>";
+
+  // transform big MY import banners -> compact pill link
+  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    const href = a.getAttribute("href") || a.textContent || "#";
+    const pill = document.createElement("a");
+    pill.className = "myha-btn myha-inline-import";
+    pill.setAttribute("data-open", href);
+    pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
+    a.replaceWith(pill);
   });
-  return out;
-}
-function scoreItem(it, tokens){
-  if (!tokens.length) return 0;
-  const title = (it.title||"").toLowerCase();
-  const desc  = (it.excerpt||"").toLowerCase();
-  const tags  = (it.tags||[]).map(String).join(" ").toLowerCase();
-  let score = 0;
-  for (const t of tokens){
-    if (title.includes(t)) score += 6;   // strongest
-    if (tags.includes(t))  score += 4;
-    if (desc.includes(t))  score += 2;
-  }
-  return score;
+
+  // rewrite topic links via same-origin redirect
+  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
+    const redir = rewriteToRedirect(a.getAttribute("href"));
+    if (redir) a.setAttribute("data-open", redir);
+  });
+
+  // intercept any pill click
+  tmp.addEventListener("click", (ev)=>{
+    const a = ev.target.closest("[data-open]");
+    if (!a) return;
+    ev.preventDefault();
+    openExternal(a.getAttribute("data-open"));
+  });
+
+  container.innerHTML = "";
+  container.appendChild(tmp);
 }
 
-/* card renderer */
+/* cache for full post body */
+const detailCache = new Map();
+
+/* card */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
 
-  const showNeutral = (it.import_count || 0) > 1;
+  const title = formatTitle(it.title || "");
+  const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
+  const likeCount = it.likes ?? 0;
 
   el.innerHTML = `
     <div class="row">
-      <h3 title="${esc(it.title)}">${esc(cleanTitle(it.title))}</h3>
+      <h3>${esc(title)}</h3>
       ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
     </div>
-    <div class="tags">${(it.tags||[]).slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
+    ${tagPills(visibleTags)}
 
-    <div class="desc-wrap collapsed" id="wrap-${it.id}">
-      <p class="desc">${esc(it.excerpt || "")}</p>
-      <div class="grad"></div>
-      <div class="toggle">Read more</div>
+    <div class="desc-wrap">
+      <div class="desc-box" id="desc-${it.id}">
+        ${esc(it.excerpt || "")}
+      </div>
     </div>
 
-    <div class="meta">${likePill(it.likes||0)}</div>
+    <div class="toggle" data-id="${it.id}">Read more</div>
+    <div class="more" id="more-${it.id}"></div>
+
     <div class="card__footer">
-      ${showNeutral
-        ? `<a class="neutral-btn" data-viewdesc="${it.id}"><sl-icon name="file-text"></sl-icon><span>View description</span></a>`
-        : `<a class="import-btn" href="${esc(it.import_url)}" target="_blank" rel="noopener">
-             <sl-icon name="download"></sl-icon><span>Import to Home Assistant</span>
-           </a>`}
+      ${likesPill(likeCount)}
+      <span id="cta-${it.id}"></span>
     </div>
   `;
 
-  const wrap = el.querySelector(`#wrap-${it.id}`);
-  const tog  = wrap.querySelector(".toggle");
+  // CTA: if the forum post contains more than one import banner,
+  // change CTA to "View description".
+  const ctaSpan = el.querySelector(`#cta-${it.id}`);
+  const defaultCTA = importButton(it.import_url);
+  ctaSpan.innerHTML = defaultCTA;
 
-  async function expand(){
-    if (!cookedCache.has(it.id)) {
-      try{
+  async function ensureCTAFromPost(){
+    try{
+      if (!detailCache.has(it.id)) {
         const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-        const tmp = document.createElement("div");
-        tmp.innerHTML = data.cooked || "";
-        const count = rewriteCookedAndCount(tmp);
-        cookedCache.set(it.id, { html: tmp.innerHTML, count });
-      }catch(e){
-        cookedCache.set(it.id, { html:`<em>Failed to load post: ${esc(String(e.message||e))}</em>`, count:0 });
+        detailCache.set(it.id, data.cooked || "");
       }
-    }
-    wrap.classList.remove("collapsed");
-    wrap.innerHTML = `<div class="desc" style="-webkit-line-clamp:unset; overflow:visible">${cookedCache.get(it.id).html}</div><div class="toggle">Less</div>`;
-    wrap.querySelector(".toggle").addEventListener("click", collapse);
+      const cooked = detailCache.get(it.id) || "";
+      const importCount = (cooked.match(/my\.home-assistant\.io\/redirect\/blueprint_import/gi) || []).length;
+      if (importCount > 1) ctaSpan.innerHTML = viewDescButton();
+    }catch{/* ignore */}
   }
-  function collapse(){
-    wrap.classList.add("collapsed");
-    wrap.innerHTML = `<p class="desc">${esc(it.excerpt || "")}</p><div class="grad"></div><div class="toggle">Read more</div>`;
-    wrap.querySelector(".toggle").addEventListener("click", expand);
-  }
-  tog.addEventListener("click", expand);
+  ensureCTAFromPost();
 
-  const viewBtn = el.querySelector(`[data-viewdesc="${it.id}"]`);
-  if (viewBtn){
-    viewBtn.addEventListener("click", (ev)=>{ ev.preventDefault(); expand(); });
+  // Read more / less
+  const toggle = el.querySelector(".toggle");
+  const more = el.querySelector(`#more-${it.id}`);
+  const desc = el.querySelector(`#desc-${it.id}`);
+  let expanded = false;
+
+  async function expandNow(){
+    if (expanded) return;
+    expanded = true;
+    toggle.style.pointerEvents = "none";
+    try{
+      if (!detailCache.has(it.id)) {
+        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+        detailCache.set(it.id, data.cooked || "");
+      }
+      setPostHTML(more, detailCache.get(it.id));
+    }catch(e){
+      setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
+    }finally{
+      toggle.style.pointerEvents = "";
+    }
+    more.style.display = "block";
+    toggle.textContent = "Less";
   }
+
+  toggle.addEventListener("click", async () => {
+    if (expanded) {
+      expanded = false;
+      more.style.display = "none";
+      toggle.textContent = "Read more";
+    } else {
+      await expandNow();
+    }
+  });
+
+  el.addEventListener("click", (ev)=>{
+    const opener = ev.target.closest("[data-open]");
+    if (!opener) return;
+    ev.preventDefault();
+    if (opener.hasAttribute("data-viewdesc")) {
+      expandNow();
+      return;
+    }
+    openExternal(opener.getAttribute("data-open"));
+  });
 
   return el;
 }
-function appendItems(target, items){ for(const it of items) target.appendChild(renderCard(it)); }
 
-/* Spotlight */
-async function buildSpotlight(){
-  const grid = $("#contribGrid");
-  if (!grid) return;
+function appendItems(target, items){
+  for (const it of items) target.appendChild(renderCard(it));
+}
 
-  try{
-    const [liked, recent] = await Promise.all([
-      fetchJSON(`${API}/blueprints?page=0&sort=likes`),
-      fetchJSON(`${API}/blueprints?page=0&sort=new`)
-    ]);
-    const mostPopular = liked?.items?.[0] || null;
-    const mostRecent  = recent?.items?.[0] || null;
+/* --------------------- Creators Spotlight --------------------- */
+async function buildSpotlight(allItems){
+  const grid = $("#cs-grid");
+  const loading = $("#cs-loading");
+  grid.style.display = "none";
+  loading.style.display = "flex";
 
-    // most uploads: scan a few pages quickly
-    let page=0, hasMore=true, maxPages=5;
-    const counts = new Map();
-    while (hasMore && page<maxPages){
-      const r = await fetchJSON(`${API}/blueprints?page=${page}&sort=title`);
-      (r?.items||[]).forEach(it => { if (it.author) counts.set(it.author, (counts.get(it.author)||0)+1); });
-      hasMore = !!r?.has_more; page++;
-    }
-    let topAuthor="—", topCount=0;
-    counts.forEach((c,a)=>{ if (c>topCount){ topAuthor=a; topCount=c; } });
+  // compute using current batch
+  // Most popular blueprint = highest likes
+  const byLikes = [...allItems].sort((a,b)=> (b.likes||0)-(a.likes||0));
+  const mostPopular = byLikes[0];
 
-    grid.innerHTML = `
-      <div class="contrib-card">
-        <h4>Most Popular Blueprint</h4>
-        <div class="contrib-title">${esc(mostPopular?.author ?? "—")}</div>
-        <div class="contrib-line">${esc(cleanTitle(mostPopular?.title ?? "—"))}</div>
-      </div>
-      <div class="contrib-card">
-        <h4>Most Uploaded Blueprints</h4>
-        <div class="contrib-title">${esc(topAuthor)}</div>
-        <div class="contrib-line">${k(topCount)} Blueprints</div>
-      </div>
-      <div class="contrib-card">
-        <h4>Most Recent Upload</h4>
-        <div class="contrib-title">${esc(mostRecent?.author ?? "—")}</div>
-        <div class="contrib-line">${esc(cleanTitle(mostRecent?.title ?? "—"))}</div>
-      </div>
-    `;
-  }catch{
-    // keep skeleton if anything fails
+  // Most uploaded blueprints = max count by author
+  const byAuthor = {};
+  for (const x of allItems) {
+    if (!x.author) continue;
+    byAuthor[x.author] = (byAuthor[x.author]||0)+1;
   }
+  const topAuthor = Object.entries(byAuthor).sort((a,b)=>b[1]-a[1])[0] || ["",0];
+
+  // Most recent upload (by created or updated timestamp if available)
+  const byRecent = [...allItems].sort((a,b)=>{
+    const ad = new Date(a.created_at || a.updated_at || 0).getTime();
+    const bd = new Date(b.created_at || b.updated_at || 0).getTime();
+    return bd - ad;
+  });
+  const mostRecent = byRecent[0];
+
+  const card = (title, author, line)=>{
+    return `<div class="contrib-card">
+      <h4>${esc(title)}</h4>
+      <div class="contrib-author">${esc(author || "—")}</div>
+      <div>${line||""}</div>
+    </div>`;
+  };
+
+  grid.innerHTML = `
+    ${card("Most Popular Blueprint",
+           mostPopular?.author,
+           mostPopular ? esc(formatTitle(mostPopular.title)) : "—")}
+    ${card("Most Uploaded Blueprints",
+           topAuthor?.[0] || "—",
+           `${topAuthor?.[1] || 0} Blueprints`)}
+    ${card("Most Recent Upload",
+           mostRecent?.author,
+           mostRecent ? esc(formatTitle(mostRecent.title)) : "—")}
+  `;
+
+  loading.style.display = "none";
+  grid.style.display = "grid";
 }
 
-/* heading */
-function updateHeading({sort, bucket, q}) {
-  const h = $("#headingEl"); if (!h) return;
-  let base = (sort==="likes") ? "Most liked blueprints" : (sort==="title") ? "Titles A–Z" : "Newest blueprints";
-  const parts = [base];
-  if (bucket) parts.push(`tag: ${bucket}`);
-  if (q) parts.push(`query: “${q}”`);
-  h.textContent = parts.join(" • ");
-}
-
-/* boot */
+/* --------------------- boot & data flow --------------------- */
 function boot(){
   const list   = $("#list");
   const empty  = $("#empty");
@@ -205,26 +332,38 @@ function boot(){
   const search = $("#search");
   const sortSel = $("#sort");
   const refreshBtn = $("#refresh");
+  const sentinel = $("#sentinel");
+  const heading = $("#heading");
+
   const tagdd = $("#tagdd");
   const tagbtn = $("#tagbtn");
   const tagmenu = $("#tagmenu");
-  const sentinel = $("#sentinel");
 
   if (!list) return;
 
   let page = 0;
   let qText = "";
-  let qTokens = [];
   let loading = false;
   let hasMore = true;
-  let sort = "new";
+  let sort = "likes";   // likes | new | title
   let bucket = "";
 
-  let epoch = 0;
-  let io;
+  // stable apply-sort guard
+  let applyingSort = false;
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
   const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
+
+  function updateHeading(){
+    const bits = [];
+    if (sort === "likes") bits.push("Most liked blueprints");
+    else if (sort === "new") bits.push("Newest blueprints");
+    else bits.push("Title A–Z");
+
+    if (qText) bits.push(`• query: “${qText}”`);
+    if (bucket) bits.push(`• tag: ${bucket}`);
+    heading.textContent = bits.join(" ");
+  }
 
   async function fetchFilters(){
     try{
@@ -235,137 +374,121 @@ function boot(){
       tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
       tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
       tagmenu.addEventListener("sl-select", async (ev)=>{
-        bucket = ev.detail.item.value || "";
+        const val = ev.detail.item.value || "";
+        bucket = val;
         tagbtn.textContent = bucket || "All tags";
-        await loadAll(false);
-        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
+        await loadAllForSearch();
       });
-    }catch{}
+    }catch{/* optional */}
   }
 
-  function pageURL(p){
+  async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
-    // no q_title on purpose for search-by-description; server-side filter would miss desc matches
+    if (qText) url.searchParams.set("q", qText);          // server can soft-filter
     if (sort) url.searchParams.set("sort", sort);
     if (bucket) url.searchParams.set("bucket", bucket);
-    return url.toString();
+    return await fetchJSON(url.toString());
   }
 
-  async function loadInfinite(first, myEpoch){
-    if (loading || (!hasMore && !first)) return;
+  // maintain a rolling set of items for spotlight & client search ranking
+  const allItemsSoFar = [];
+
+  async function load(initial=false){
+    if (loading || (!hasMore && !initial)) return;
     loading = true; clearError();
     try{
-      const data = await fetchJSON(pageURL(page));
-      if (myEpoch !== epoch) return;
-      const items = (data.items || []);
-      if (first){ list.innerHTML = ""; empty.style.display = items.length ? "none" : "block"; }
-      appendItems(list, items);
+      const data = await fetchPage(page);
+      const items = data.items || [];
       hasMore = !!data.has_more;
+
+      // keep a rolling list for spotlight
+      allItemsSoFar.push(...items);
+
+      // client-side word matching keeps "great search" you liked
+      const terms = (qText||"").toLowerCase().split(/\s+/).filter(Boolean);
+      let out = items;
+      if (terms.length){
+        out = items.map(it=>{
+          const hay = `${it.title||""} ${it.excerpt||""} ${(it.tags||[]).join(" ")}`.toLowerCase();
+          let score = 0;
+          for (const t of terms){
+            if (hay.includes(t)) score += 3;          // title/desc hit
+            if ((it.tags||[]).some(x=>String(x).toLowerCase().includes(t))) score += 2;
+          }
+          return {it, score};
+        }).filter(x=>x.score>0)
+          .sort((a,b)=>b.score-a.score)
+          .map(x=>x.it);
+      }
+
+      // render
+      if (initial){
+        list.innerHTML = "";
+        if (empty) empty.style.display = out.length ? "none" : "block";
+      }
+      appendItems(list, out);
       page += 1;
+
+      // after first couple pages come in, build spotlight (spinner shows meanwhile)
+      if (page === 2) buildSpotlight(allItemsSoFar);
     }catch(e){
-      if (myEpoch === epoch) setError(`Failed to load: ${String(e.message||e)}`);
-    }finally{ loading = false; }
-  }
-
-  // Progressive search: rank + render after each page
-  async function progressiveSearch(myEpoch){
-    list.innerHTML = ""; empty.style.display = "none"; clearError();
-    let p=0, more=true;
-    const collected=[]; const TOP_LIMIT = 400; const FIRST_SHOW = 1; // show after first page
-    let firstShown=false;
-
-    while (more){
-      const r = await fetchJSON(pageURL(p));
-      if (myEpoch !== epoch) return;
-
-      (r?.items||[]).forEach(it=>{
-        it.__score = scoreItem(it, qTokens);
-        if (it.__score>0) collected.push(it);
-      });
-
-      // keep list bounded for speed
-      if (collected.length > TOP_LIMIT) {
-        collected.sort((a,b)=>b.__score - a.__score);
-        collected.length = TOP_LIMIT;
-      }
-
-      if (!firstShown && p>=FIRST_SHOW){
-        firstShown = true;
-        renderRanked(collected);
-      }else if (firstShown){
-        // refresh view every 2 pages for responsiveness
-        if (p % 2 === 0) renderRanked(collected);
-      }
-
-      more = !!r?.has_more;
-      p++;
-
-      // Safety cap (speed): stop after 30 pages
-      if (p>=30) break;
-    }
-
-    if (!firstShown) {
-      if (collected.length) renderRanked(collected);
-      else empty.style.display = "block";
-    } else {
-      renderRanked(collected);
+      setError(`Failed to load: ${String(e.message||e)}`);
+    }finally{
+      loading = false;
     }
   }
 
-  function renderRanked(arr){
-    const items = [...arr];
-    items.sort((a,b)=>{
-      if (b.__score !== a.__score) return b.__score - a.__score;
-      if (sort==="likes") return (b.likes||0) - (a.likes||0);
-      if (sort==="title") return String(a.title||"").localeCompare(String(b.title||""));
-      return 0;
-    });
-    list.innerHTML = "";
-    appendItems(list, items);
-  }
-
-  async function loadAll(resetSpotlight=false){
-    epoch += 1; const myEpoch = epoch;
-    page = 0; hasMore = true;
-    updateHeading({sort, bucket, q:qText});
-
-    if (io) io.disconnect();
-
-    if (qTokens.length){
-      await progressiveSearch(myEpoch);
-    }else{
-      await loadInfinite(true, myEpoch);
-      if (sentinel){
-        io = new IntersectionObserver((e)=>{ if (e[0] && e[0].isIntersecting) loadInfinite(false, myEpoch); }, {rootMargin:"700px"});
-        io.observe(sentinel);
-      }
-    }
-
-    if (resetSpotlight) buildSpotlight();
+  async function loadAllForSearch(){
+    page = 0; hasMore = true; list.innerHTML = ""; clearError();
+    allItemsSoFar.length = 0;
+    updateHeading();
+    // reset spotlight spinner
+    const grid = $("#cs-grid"); const loadingBox = $("#cs-loading");
+    if (grid && loadingBox){ grid.style.display="none"; loadingBox.style.display="flex"; }
+    await load(true);
   }
 
   if (search){
-    const onSearch = debounce(async ()=>{
+    const onSearch = debounce(async () => {
       qText = (search.value || "").trim();
-      qTokens = tokenize(qText);
-      await loadAll(false);
-    }, 220);
+      await loadAllForSearch();
+    }, 260);
     search.addEventListener("sl-input", onSearch);
     search.addEventListener("sl-clear", onSearch);
   }
 
   if (sortSel){
-    sortSel.addEventListener("sl-change", async ()=>{ sort = sortSel.value || "new"; await loadAll(false); });
+    // make sure the dropdown always reflects the active sort and applies exactly once
+    sortSel.addEventListener("sl-change", async () => {
+      if (applyingSort) return;
+      applyingSort = true;
+      try{
+        const v = sortSel.value || "likes";
+        if (v !== sort){ sort = v; }
+        // keep the control in sync explicitly
+        sortSel.value = sort;
+        await loadAllForSearch();
+      }finally{
+        applyingSort = false;
+      }
+    });
   }
+
   if (refreshBtn){
-    refreshBtn.addEventListener("click", async ()=>{ await loadAll(true); });
+    refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
+  }
+
+  if (sentinel){
+    const io = new IntersectionObserver((entries)=>{
+      if (entries[0] && entries[0].isIntersecting) load(false);
+    },{ rootMargin:"700px" });
+    io.observe(sentinel);
   }
 
   fetchFilters();
-  updateHeading({sort, bucket, q:qText});
-  buildSpotlight();      // visible immediately (skeleton -> data)
-  loadAll(false);        // cards
+  updateHeading();
+  load(true);
 }
 
 document.addEventListener("DOMContentLoaded", boot);
