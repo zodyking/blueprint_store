@@ -32,6 +32,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# ------------------------------ helpers ------------------------------
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE  = re.compile(r"\s+")
 
@@ -57,9 +58,11 @@ def _topic_locks(hass: HomeAssistant) -> dict[int, asyncio.Lock]:
     return _store(hass).setdefault("topic_locks", {})
 
 def _rate_state(hass: HomeAssistant) -> dict:
+    # keep last-call timestamp for simple global pacing
     return _store(hass).setdefault("rate_state", {"last": 0.0})
 
 async def _pace(hass: HomeAssistant, min_interval: float = 0.35):
+    """Ensure at least min_interval seconds between community calls."""
     st = _rate_state(hass)
     now = time.perf_counter()
     wait = max(0.0, (st["last"] + min_interval) - now)
@@ -68,7 +71,7 @@ async def _pace(hass: HomeAssistant, min_interval: float = 0.35):
     st["last"] = time.perf_counter()
 
 async def _fetch_json(hass: HomeAssistant, session, url):
-    await _pace(hass)
+    await _pace(hass)  # global pacing to avoid 429 bursts
     headers = {
         "Accept": "application/json",
         "User-Agent": "HomeAssistant-BlueprintStore/0.6 (+https://www.home-assistant.io)",
@@ -104,6 +107,7 @@ def _guess_uses_from_cooked(cooked: str) -> int | None:
             return _maybe_int(m.group(1))
     return None
 
+# --------------------- bucket classifier (curated) --------------------
 _BUCKET_KEYWORDS = {
     "Lighting": ["light","lights","lamp","dimmer","brightness","color","wled","led","hue","lifx","switch (light)"],
     "Climate & Ventilation": ["climate","thermostat","hvac","heating","cooling","heatpump","ac","humidifier","dehumidifier","ventilation","fan","air conditioner"],
@@ -136,14 +140,17 @@ def _classify_bucket(title: str, tags: set[str]) -> str:
     if any(x in t for x in ("assistant"," llm"," ai","whisper","stt","speech-to-text","intent","nlu")): return "AI & Assistants"
     return "Other"
 
+# --------------------- community fetchers (with cache) ----------------
 async def _topic_detail(hass: HomeAssistant, session, topic_id: int):
+    """Fetch full topic once and cache it (to avoid 429)."""
     cache = _topic_cache(hass)
     entry = cache.get(topic_id)
     now = time.time()
     ttl = int(_cfg(hass).get("cache_seconds", DEFAULT_CACHE_SECONDS))
-    if entry and (now - entry["ts"] < max(ttl, 1800)):
+    if entry and (now - entry["ts"] < max(ttl, 1800)):  # at least 30 min
         return entry["data"]
 
+    # one-flight-per-topic
     locks = _topic_locks(hass)
     lock = locks.setdefault(topic_id, asyncio.Lock())
     async with lock:
@@ -158,7 +165,12 @@ async def _topic_detail(hass: HomeAssistant, session, topic_id: int):
             return None
 
         cooked = posts[0].get("cooked", "") or ""
-        m = re.search(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked)
+        # count imports in cooked
+        import_links = re.findall(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked, flags=re.IGNORECASE)
+        import_count = len(import_links)
+
+        # grab first import link for CTA
+        m = re.search(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked, flags=re.IGNORECASE)
         if not m:
             cache[topic_id] = {"ts": now, "data": None}
             return None
@@ -171,17 +183,23 @@ async def _topic_detail(hass: HomeAssistant, session, topic_id: int):
         author = author_obj.get("username") or ""
         uses = _guess_uses_from_cooked(cooked)
 
+        # likes: prefer topic like_count, else first-post like_count
+        likes = data.get("like_count") or posts[0].get("like_count") or 0
+
         payload = {
             "import_url": import_href,
+            "import_count": import_count,
             "excerpt": _excerpt(cooked),
             "author": author,
             "uses": uses,
+            "likes": likes,
             "cooked": cooked,
         }
         cache[topic_id] = {"ts": time.time(), "data": payload}
         return payload
 
 async def _fetch_category_topics(hass: HomeAssistant, session, page: int):
+    """Try reliable endpoints; return (topics, has_more)."""
     endpoints = [
         f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
         f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}",
@@ -207,6 +225,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
     session = async_get_clientsession(hass)
     topics, more_hint = await _fetch_category_topics(hass, session, page)
 
+    # Lower concurrency to reduce burst on first page
     sem = asyncio.Semaphore(4)
     out = []
 
@@ -230,6 +249,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
             if bucket_filter and bucket != bucket_filter:
                 return
 
+            # Build slugged, human URL for forum post
             slug = t.get("slug") or ""
             topic_url = f"{COMMUNITY_BASE}/t/{slug}/{tid}" if slug else f"{COMMUNITY_BASE}/t/{tid}"
 
@@ -239,16 +259,20 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
                 "author": detail["author"],
                 "topic_url": topic_url,
                 "import_url": detail["import_url"],
+                "import_count": detail["import_count"],
                 "excerpt": detail["excerpt"],
                 "uses": detail["uses"],
+                "likes": detail["likes"],
                 "tags": list(topic_tags),
                 "bucket": bucket,
             })
 
     await asyncio.gather(*(process(t) for t in topics if isinstance(t, dict)))
+
     out.sort(key=lambda x: x["id"], reverse=True)
     return out, more_hint
 
+# ------------------------------ views ------------------------------
 class BlueprintsPagedView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
@@ -275,8 +299,8 @@ class BlueprintsPagedView(HomeAssistantView):
             items, more_hint = await _list_page(self.hass, page, q_title, bucket)
             if sort == "title":
                 items.sort(key=lambda x: x["title"].lower())
-            elif sort == "uses":
-                items.sort(key=lambda x: (x["uses"] or 0), reverse=True)
+            elif sort == "likes":
+                items.sort(key=lambda x: (x["likes"] or 0), reverse=True)
             has_more = more_hint and ((page + 1) < max_pages)
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
@@ -346,6 +370,7 @@ class BlueprintImagesStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
+# ------------------------ registration (idempotent) -------------------
 async def _register_views_and_panel(hass: HomeAssistant):
     store = _store(hass)
     lock: asyncio.Lock = store.setdefault("reg_lock", asyncio.Lock())
