@@ -6,7 +6,7 @@ import inspect
 import logging
 from urllib.parse import urljoin
 
-from aiohttp import web
+from aiohttp import web, ClientError
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import HomeAssistantView
@@ -49,12 +49,18 @@ def _cfg(hass: HomeAssistant):
 async def _fetch_json(session, url):
     headers = {
         "Accept": "application/json",
-        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://home-assistant.io)",
+        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://www.home-assistant.io)",
         "Referer": f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}"
     }
+    _LOGGER.debug("GET %s", url)
     async with session.get(url, headers=headers, allow_redirects=True) as resp:
-        resp.raise_for_status()
-        return await resp.json()
+        text = await resp.text()
+        if resp.status != 200:
+            raise ClientError(f"{resp.status} {resp.reason} – {url} – body: {text[:200]}")
+        try:
+            return await resp.json()
+        except Exception as e:
+            raise ClientError(f"Invalid JSON from {url}: {text[:200]}") from e
 
 def _maybe_int(text: str | None):
     if not text:
@@ -76,76 +82,23 @@ def _guess_uses_from_cooked(cooked: str) -> int | None:
             return _maybe_int(m.group(1))
     return None
 
-# -------- Curated category (bucket) classifier --------
+# -------- Curated category classifier (unchanged) --------
 _BUCKET_KEYWORDS = {
-    "Lighting": [
-        "light", "lights", "lamp", "dimmer", "brightness", "color",
-        "wled", "led", "hue", "lifx", "switch (light)"
-    ],
-    "Climate & Ventilation": [
-        "climate", "thermostat", "hvac", "heating", "cooling", "heatpump", "ac",
-        "humidifier", "dehumidifier", "ventilation", "fan", "air conditioner"
-    ],
-    "Security & Alarm": [
-        "alarmo", "alarm", "arming", "arm", "disarm", "siren", "intrusion",
-        "security system"
-    ],
-    "Safety (Smoke/CO/Leak)": [
-        "smoke", "smoke detector", "co detector", "carbon monoxide", "gas leak",
-        "leak", "water leak", "flood", "fire", "safety"
-    ],
-    "Presence & Occupancy": [
-        "presence", "occupancy", "motion", "motion sensor", "person", "people",
-        "arrive", "arrival", "leave", "leaving", "zone", "geofence", "proximity",
-        "bluetooth", "ble", "wifi presence"
-    ],
-    "Access & Locks": [
-        "lock", "unlock", "door lock", "garage", "garage door", "gate",
-        "door", "window", "contact", "reed", "keypad", "entry"
-    ],
-    "Cameras & Vision": [
-        "camera", "snapshot", "record", "frigate", "object detection", "rtsp",
-        "nvr", "doorbell", "face", "recognition", "ocr", "image"
-    ],
-    "Media & Entertainment": [
-        "media", "tv", "cast", "chromecast", "sonos", "speaker", "spotify",
-        "plex", "kodi", "volume", "music", "shield"
-    ],
-    "AI & Assistants": [
-        "ai", "assistant", "assist", "agent", "llm", "large language model",
-        "openai", "chatgpt", "gpt", "claude", "gemini", "ollama",
-        "whisper", "stt", "speech-to-text", "asr",
-        "rhasspy", "wyoming", "piper", "coqui", "intent", "nlu", "conversation"
-    ],
-    "Announcements & Notifications": [
-        "notify", "notification", "announce", "announcement",
-        "tts", "text-to-speech", "say", "speak",
-        "mobile_app", "push", "telegram", "discord", "slack",
-        "email", "signal", "matrix"
-    ],
-    "Energy & Power": [
-        "energy", "power", "solar", "pv", "inverter", "battery",
-        "consumption", "kwh", "watt", "utility_meter", "price", "tariff",
-        "charger", "ev", "vehicle", "wallbox", "smart plug"
-    ],
-    "Environment & Weather": [
-        "weather", "forecast", "rain", "wind", "storm",
-        "temperature", "humidity", "pressure",
-        "air quality", "aqi", "pm2.5", "co2", "uv", "sun", "sunrise", "sunset"
-    ],
-    "Appliances & Utilities": [
-        "washing", "washer", "dryer", "dishwasher", "vacuum", "roomba", "mower",
-        "irrigation", "sprinkler", "pool", "spa", "water heater", "boiler",
-        "oven", "stove"
-    ],
-    "Scheduling & Scenes": [
-        "schedule", "scheduler", "timer", "countdown", "delay",
-        "scene", "mode", "away", "night", "sleep", "dnd", "calendar", "routine"
-    ],
-    "System & Maintenance": [
-        "backup", "watchdog", "update", "restart", "health", "uptime",
-        "database", "recorder", "purge", "snapshot", "template", "script"
-    ],
+    "Lighting": ["light","lights","lamp","dimmer","brightness","color","wled","led","hue","lifx","switch (light)"],
+    "Climate & Ventilation": ["climate","thermostat","hvac","heating","cooling","heatpump","ac","humidifier","dehumidifier","ventilation","fan","air conditioner"],
+    "Security & Alarm": ["alarmo","alarm","arming","arm","disarm","siren","intrusion","security system"],
+    "Safety (Smoke/CO/Leak)": ["smoke","smoke detector","co detector","carbon monoxide","gas leak","leak","water leak","flood","fire","safety"],
+    "Presence & Occupancy": ["presence","occupancy","motion","motion sensor","person","people","arrive","arrival","leave","leaving","zone","geofence","proximity","bluetooth","ble","wifi presence"],
+    "Access & Locks": ["lock","unlock","door lock","garage","garage door","gate","door","window","contact","reed","keypad","entry"],
+    "Cameras & Vision": ["camera","snapshot","record","frigate","object detection","rtsp","nvr","doorbell","face","recognition","ocr","image"],
+    "Media & Entertainment": ["media","tv","cast","chromecast","sonos","speaker","spotify","plex","kodi","volume","music","shield"],
+    "AI & Assistants": ["ai","assistant","assist","agent","llm","large language model","openai","chatgpt","gpt","claude","gemini","ollama","whisper","stt","speech-to-text","asr","rhasspy","wyoming","piper","coqui","intent","nlu","conversation"],
+    "Announcements & Notifications": ["notify","notification","announce","announcement","tts","text-to-speech","say","speak","mobile_app","push","telegram","discord","slack","email","signal","matrix"],
+    "Energy & Power": ["energy","power","solar","pv","inverter","battery","consumption","kwh","watt","utility_meter","price","tariff","charger","ev","vehicle","wallbox","smart plug"],
+    "Environment & Weather": ["weather","forecast","rain","wind","storm","temperature","humidity","pressure","air quality","aqi","pm2.5","co2","uv","sun","sunrise","sunset"],
+    "Appliances & Utilities": ["washing","washer","dryer","dishwasher","vacuum","roomba","mower","irrigation","sprinkler","pool","spa","water heater","boiler","oven","stove"],
+    "Scheduling & Scenes": ["schedule","scheduler","timer","countdown","delay","scene","mode","away","night","sleep","dnd","calendar","routine"],
+    "System & Maintenance": ["backup","watchdog","update","restart","health","uptime","database","recorder","purge","snapshot","template","script"],
     "Other": [],
 }
 
@@ -156,14 +109,10 @@ def _classify_bucket(title: str, tags: set[str]) -> str:
         for w in words:
             if w and (w in t or w in lower_tags):
                 return bucket
-    if "alarm" in t or "alarmo" in t:
-        return "Security & Alarm"
-    if any(x in t for x in ("smoke", "leak", "gas", "carbon monoxide", "co ")):
-        return "Safety (Smoke/CO/Leak)"
-    if "light" in t or "wled" in t:
-        return "Lighting"
-    if any(x in t for x in ("assistant", " llm", " ai", "whisper", "stt", "speech-to-text", "intent", "nlu")):
-        return "AI & Assistants"
+    if "alarm" in t or "alarmo" in t: return "Security & Alarm"
+    if any(x in t for x in ("smoke","leak","gas","carbon monoxide","co ")): return "Safety (Smoke/CO/Leak)"
+    if "light" in t or "wled" in t: return "Lighting"
+    if any(x in t for x in ("assistant"," llm"," ai","whisper","stt","speech-to-text","intent","nlu")): return "AI & Assistants"
     return "Other"
 
 async def _topic_detail(session, topic_id: int):
@@ -189,13 +138,32 @@ async def _topic_detail(session, topic_id: int):
         "cooked": cooked,
     }
 
-# ---- RESTORED: original, reliable category endpoint used when it worked ----
+# ---------- category listing (tries reliable endpoints in order) ----------
+async def _fetch_category_topics(session, page: int):
+    endpoints = [
+        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
+        f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}",
+        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
+    ]
+    last_error = None
+    for url in endpoints:
+        try:
+            data = await _fetch_json(session, url)
+            tl = data.get("topic_list", data) or {}
+            topics = tl.get("topics", []) or []
+            more = bool(tl.get("more_topics_url") or tl.get("more_topics"))
+            if topics:
+                return topics, more
+        except Exception as e:
+            last_error = e
+            _LOGGER.debug("List endpoint failed %s -> %s", url, e)
+    if last_error:
+        raise last_error
+    return [], False
+
 async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket_filter: str | None):
     session = async_get_clientsession(hass)
-    url = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
-    data = await _fetch_json(session, url)
-    topic_list = (data.get("topic_list") or data) or {}
-    topics = topic_list.get("topics", []) or []
+    topics, more_hint = await _fetch_category_topics(session, page)
 
     sem = asyncio.Semaphore(10)
     out = []
@@ -234,10 +202,9 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
     await asyncio.gather(*(process(t) for t in topics if isinstance(t, dict)))
 
     out.sort(key=lambda x: x["id"], reverse=True)
-    # pagination hint (len>0 is enough; HA side does the scrolling)
-    has_more = bool(topic_list.get("more_topics_url") or len(topics) > 0)
-    return out, has_more
+    return out, more_hint
 
+# --------------------- Views ---------------------
 class BlueprintsPagedView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
@@ -267,6 +234,7 @@ class BlueprintsPagedView(HomeAssistantView):
             elif sort == "uses":
                 items.sort(key=lambda x: (x["uses"] or 0), reverse=True)
             has_more = more_hint and ((page + 1) < max_pages)
+            _LOGGER.debug("Returning %s items (page %s)", len(items), page)
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
             _LOGGER.exception("Blueprint Store: paged list failed")
@@ -336,14 +304,13 @@ class BlueprintImagesStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
-# ---------- Registration: simple, idempotent, no “remove” ----------
+# ---------------- Registration (idempotent, no removal) ----------------
 async def _register_views_and_panel(hass: HomeAssistant):
     store = hass.data.setdefault(DOMAIN, {})
     lock: asyncio.Lock = store.setdefault("reg_lock", asyncio.Lock())
     async with lock:
         if store.get("registered"):
             return
-        # Views
         try:
             hass.http.register_view(BlueprintsPagedView(hass))
             hass.http.register_view(BlueprintFiltersView(hass))
@@ -351,7 +318,6 @@ async def _register_views_and_panel(hass: HomeAssistant):
         except Exception as e:
             _LOGGER.exception("Blueprint Store: failed to register API views: %s", e)
 
-        # Static
         try:
             panel_dir = os.path.join(os.path.dirname(__file__), "panel")
             images_dir = os.path.join(os.path.dirname(__file__), "images")
@@ -360,7 +326,6 @@ async def _register_views_and_panel(hass: HomeAssistant):
         except Exception as e:
             _LOGGER.exception("Blueprint Store: failed to register static views: %s", e)
 
-        # Panel (ignore “Overwriting panel …”)
         try:
             reg = getattr(ha_frontend, "async_register_built_in_panel", None)
             if reg:
