@@ -31,10 +31,32 @@ async function fetchJSON(url, tries=3){
   }
 }
 
+/* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
+function openExternal(url){
+  try{
+    const w = window.open("", "_blank");   // blank inherits our origin
+    if (w) {
+      try { w.opener = null; } catch {}
+      const safe = String(url).replace(/"/g, "&quot;");
+      w.document.write(`<!doctype html><meta charset="utf-8">
+        <title>Opening…</title>
+        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
+        a{color:#06c;font-weight:700}</style>
+        <p>Opening forum… If nothing happens <a href="${safe}">click here</a>.</p>
+        <meta http-equiv="refresh" content="0; url='${safe}'">`);
+      try { w.location.href = url; } catch {}
+      return true;
+    }
+  } catch {}
+  // ultimate fallback – same tab
+  try { window.top.location.assign(url); } catch { location.assign(url); }
+  return false;
+}
+
 /* pill buttons */
 function importButton(href){
   return `
-    <a class="myha-btn" href="${esc(href)}" target="_blank" rel="noopener noreferrer">
+    <a class="myha-btn" data-open="${esc(href)}">
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
@@ -46,6 +68,19 @@ function viewDescButton(){
       View description
     </button>`;
 }
+
+/* NEW: stats pill (replaces old forum button) */
+function statsPill(likes, replies){
+  const l = Number(likes ?? 0);
+  const r = Number(replies ?? 0);
+  return `
+    <span class="myha-btn secondary" style="cursor:default" title="${l.toLocaleString()} likes • ${r.toLocaleString()} comments" aria-label="Post stats">
+      <sl-icon name="heart"></sl-icon>${l.toLocaleString()}
+      &nbsp;&nbsp;
+      <sl-icon name="chat-dots"></sl-icon>${r.toLocaleString()}
+    </span>`;
+}
+
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
 /* tags renderer */
@@ -59,25 +94,54 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* --- Rich post HTML (read more) --- */
+/* -------- normalize post HTML & rewrite forum links via redirect ------ */
+function rewriteToRedirect(href){
+  try{
+    const u = new URL(href);
+    if (u.hostname !== "community.home-assistant.io") return null;
+    const parts = u.pathname.split("/").filter(Boolean);
+    const idx = parts.indexOf("t");
+    if (idx === -1) return null;
+    let slug = "", id = "";
+    if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) {
+      id = parts[idx+1];
+    } else {
+      slug = (parts[idx+1] || "");
+      id = (parts[idx+2] || "").replace(/[^0-9]/g, "");
+    }
+    if (!id) return null;
+    const qs = new URLSearchParams({ tid: id, slug }).toString();
+    return `${API}/go?${qs}`;
+  }catch{ return null; }
+}
+
 function setPostHTML(container, html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // Compact MyHA import banners into our pill button
+  // Convert big MyHA banners to compact pill
   tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
     pill.className = "myha-btn myha-inline-import";
-    pill.href = href;
-    pill.target = "_blank";
-    pill.rel = "noopener noreferrer";
+    pill.setAttribute("data-open", href);
     pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
     a.replaceWith(pill);
   });
 
-  // Open all external links in a new tab (keeps the HA panel intact)
-  tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
+  // Rewrite forum-topic links to same-origin redirect + add data-open
+  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
+    const redir = rewriteToRedirect(a.getAttribute("href"));
+    if (redir) a.setAttribute("data-open", redir);
+  });
+
+  // intercept clicks on any data-open inside description
+  tmp.addEventListener("click", (ev)=>{
+    const a = ev.target.closest("[data-open]");
+    if (!a) return;
+    ev.preventDefault();
+    openExternal(a.getAttribute("data-open"));
+  });
 
   container.innerHTML = "";
   container.appendChild(tmp);
@@ -93,9 +157,9 @@ function renderCard(it){
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
 
-  // likes/replies fallback to 0 if not present
-  const likes   = Number(it.likes   ?? 0);
-  const replies = Number(it.replies ?? it.comments ?? 0);
+  // derive stats with fallbacks
+  const likes   = it.likes ?? it.like_count ?? 0;
+  const replies = it.replies ?? it.comments ?? ((it.posts_count || 1) - 1);
 
   el.innerHTML = `
     <div class="row">
@@ -110,15 +174,7 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      <div class="stats">
-        <span class="stat-pill" title="Likes">
-          <sl-icon name="heart"></sl-icon>${likes.toLocaleString()}
-        </span>
-        <span class="stat-pill" title="Comments">
-          <sl-icon name="chat-dots"></sl-icon>${replies.toLocaleString()}
-        </span>
-      </div>
-
+      ${statsPill(likes, replies)}
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -154,6 +210,14 @@ function renderCard(it){
     } else {
       await expandNow();
     }
+  });
+
+  // Intercept open buttons on the card footer (import + any in-description pills)
+  el.addEventListener("click", (ev)=>{
+    const opener = ev.target.closest("[data-open]");
+    if (!opener) return;
+    ev.preventDefault();
+    openExternal(opener.getAttribute("data-open"));
   });
 
   const viewBtn = el.querySelector('button[data-viewdesc="1"]');
