@@ -1,39 +1,24 @@
-/* Blueprint Store – focused fixes
- * - single expanding description with dark bg (read-more + dbl-click)
- * - keep expansion state when scrolling/re-rendering
- * - filter “image1234x567 12.3 KB” attachment links out of cooked HTML
- * - if cooked post contains >1 “Import to Home Assistant” links, gray the card’s CTA and show “Read Description”
- * - move Creators Spotlight rendering into footer (IDs unchanged)
- * - robust search + tags unchanged from last good build
- */
-
+/* Blueprint Store — focused fixes (stable desc, direct import, footer) */
 const API = "/api/blueprint_store";
-const $ = (s, r = document) => r.querySelector(s);
-const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const $  = (s, d=document) => d.querySelector(s);
 
-/* ---------- helpers ---------- */
-const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-const debounce = (fn, ms = 280) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
-const toNum = (x) => { x = Number(x); return Number.isFinite(x) ? x : 0; };
+/* ---------------- helpers ---------------- */
+function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const wait = ms => new Promise(r=>setTimeout(r, ms));
+const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
-/* retry with backoff (handles 429s) */
-async function fetchJSONRaw(url){
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const data = await res.json();
-  if (data && data.error) throw new Error(data.error);
-  return data;
-}
-async function fetchJSON(url, tries=4){
-  let delay = 500;
-  for (let i=0;i<tries;i++){
-    try { return await fetchJSONRaw(url); }
-    catch(e){
-      const msg = String(e.message||e);
-      if (i < tries-1 && /429|timeout|temporarily/i.test(msg)) {
-        await sleep(delay + Math.random()*250);
-        delay = Math.min(delay*2, 4000);
+async function fetchJSON(url, tries=3){
+  let backoff = 500;
+  for(let i=0;i<tries;i++){
+    try{
+      const r = await fetch(url, {cache: "no-store"});
+      if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+      const j = await r.json();
+      if (j && j.error) throw new Error(j.error);
+      return j;
+    }catch(e){
+      if (String(e.message||e).startsWith("429") && i < tries-1){
+        await wait(backoff); backoff = Math.min(backoff*2, 4000);
         continue;
       }
       throw e;
@@ -41,451 +26,352 @@ async function fetchJSON(url, tries=4){
   }
 }
 
-/* safe external open */
-function openExternal(url){
+/* open directly (no interstitial) */
+function openDirect(url){
   try{
-    const w = window.open("", "_blank");
-    if (w){
-      try{ w.opener = null; }catch{}
-      const safe = String(url).replace(/"/g, "&quot;");
-      w.document.write(`<!doctype html><meta charset="utf-8">
-        <title>Opening…</title>
-        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
-        a{color:#06c;font-weight:700}</style>
-        <p>Opening… If nothing happens <a href="${safe}">click here</a>.</p>
-        <meta http-equiv="refresh" content="0; url='${safe}'">`);
-      try{ w.location.href = url; }catch{}
-      return true;
-    }
-  }catch{}
-  try{ window.top.location.assign(url); }catch{ location.assign(url); }
-  return false;
+    const w = window.open(url, "_blank", "noopener,noreferrer");
+    if (!w) location.assign(url);
+  }catch{ location.assign(url); }
 }
 
-/* ---------- tags (unchanged behaviour) ---------- */
-const TAG_DEFS = [
-  ["Lighting", ["light","lights","led","bulb","strip","rgb","rgbw","rgbcw","cct","dimmer","brightness","fade","color","hue","lifx","nanoleaf","govee","wiz","tradfri","philips","tuya","yeelight","ambilight","downlight","spotlight","lamp","wallwash","illumination","backlight","nightlight","switchlight","scene","motionlight"]],
-  ["Climate & Ventilation", ["temp","temperature","climate","hvac","thermostat","heating","cooling","ventilation","fan","radiator","heatpump","humidifier","dehumidifier","aircon","ac","ecobee","nest","tado","honeywell","daikin","mitsubishi","bosch","trane","furnace","minisplit","heater","boiler","vent","aqara"]],
-  ["Security & Alarm", ["alarm","alarmo","armed","arm","disarm","siren","intrusion","tamper","glassbreak","doorcontact","windowcontact","keypad","pincode","panic","perimeter","pir","reed","zone","burglary","securitysystem"]],
-  ["Safety (Smoke/CO/Leak)", ["smoke","smokealarm","co","co2","carbonmonoxide","leak","waterleak","gasleak","lpg","methane","flood","moisture","detector","protect","kidde","firstalert","safety","fire","heat","hazard","valve","watershutoff"]],
-  ["Presence & Occupancy", ["presence","occupancy","person","people","zone","proximity","geofence","ibeacon","bluetooth","ble","wifi","devicetracker","gps","espresense","arrival","depart","home","away","guest","motionoccupied"]],
-  ["Access & Locks", ["lock","unlock","doorlock","deadbolt","smartlock","code","pin","rfid","nfc","keypad","garage","gate","opener","yale","schlage","kwikset","august","nuki","danalock","strike","intercom","access"]],
-  ["Cameras & Vision", ["camera","nvr","cctv","rtsp","onvif","snapshot","image","doorbell","ipc","ptz","frigate","scrypted","motioneye","blueiris","zoneminder","clip","detect","person","face","lpr","stream","ffmpeg","unifi","protect","ubiquiti","dahua","hikvision","reolink","wyze","arlo","ring","eufy","amcrest","blink","tplink","tapo","annke"]],
-  ["Media & Entertainment", ["media","music","tv","video","speaker","sound","volume","playlist","radio","cast","chromecast","airplay","dlna","sonos","spotify","plex","kodi","jellyfin","emby","appletv","androidtv","firetv","avr","denon","marantz","yamaha","soundbar"]],
-  ["AI & Assistants", ["assistant","voice","tts","stt","wake","hotword","whisper","piper","coqui","azuretts","googl etts","rasa","rhasspy","wyoming","openwakeword","porcupine","llm","ai","chatgpt","openai","groq","llama","mistral","gpt","claude","intent","pipeline","microphone"]],
-  ["Announcements & Notifications", ["notification","announce","announcement","alert","message","notify","push","email","smtp","sms","twilio","mobile_app","pushover","pushbullet","pushcut","telegram","discord","matrix","slack","gotify","ntfy","webhook","call"]],
-  ["Energy & Power", ["energy","power","kwh","consumption","solar","pv","panel","inverter","battery","soc","grid","tariff","smartplug","meter","shelly","sonoff","victron","fronius","growatt","solis","goodwe","tesla","charger","ev","wallbox","zappi"]],
-  ["Environment & Weather", ["weather","forecast","rain","wind","sun","uv","aqi","airquality","humidity","pressure","barometer","dewpoint","lightning","pollen","cloud","visibility","storm","openweather","met","season","sunrise","sunset","moon","outdoor","sensor"]],
-  ["Appliances & Utilities", ["appliance","washer","washingmachine","dryer","dishwasher","vacuum","robot","roborock","dreame","deebot","mop","kitchen","oven","stove","microwave","kettle","coffee","espresso","fridge","freezer","airpurifier","heater","waterheater","pump","irblaster"]],
-  ["Scheduling & Scenes", ["schedule","timer","delay","interval","calendar","holiday","weekday","weekend","sunset","sunrise","offset","scene","script","mode","sleep","night","morning","bedtime","quiet","repeat","cron","duration"]],
-  ["System & Maintenance", ["system","maintenance","backup","restore","snapshot","supervisor","addon","update","upgrade","restart","reboot","watchdog","ping","uptime","health","recorder","database","purge","logbook","template","mqtt","zha","zigbee","zwave","integration","entity","debug"]],
-  ["Other", []]
-];
-const TAG_ORDER = TAG_DEFS.map(([n])=>n);
-function deriveTags(text){
-  const t = text.toLowerCase();
-  const hits = [];
-  for (const [name, keys] of TAG_DEFS){
-    if (!keys.length) continue;
-    let c = 0;
-    for (const k of keys){
-      if (t.includes(k)) c++;
-      if (c >= 3) { hits.push(name); break; }
-    }
-  }
-  if (!hits.length) hits.push("Other");
-  return Array.from(new Set(hits));
-}
-
-/* ---------- title parsing ---------- */
-const LEADING_EMOJI_RE = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\s\W_]+/u;
-function sanitizeTitle(raw){
-  let s = (raw || "").toString();
-  s = s.replace(/\[blueprint\]/i, "");
-  s = s.replace(LEADING_EMOJI_RE, "");
-  s = s.replace(/[^0-9A-Za-z()\-: ]+/g, " ").replace(/\s{2,}/g," ").trim();
-  s = s.split(" ").map(w=>{
-    if (w.length <= 4 && w === w.toUpperCase()) return w;
-    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-  }).join(" ");
-  return s;
-}
-
-/* ---------- cooked HTML sanitation ---------- */
-function setPostHTMLInto(container, html){
+/* remove Discourse “image1536x…” attachment links + rewrite any forum links through our API redirect;
+   keep my.home-assistant.io import links intact so users can click them inside the description */
+function sanitizeCookedHTML(html){
   const tmp = document.createElement("div");
-  tmp.innerHTML = html || "<em>Nothing to show.</em>";
+  tmp.innerHTML = html || "";
 
-  // remove “image1234x567 12.3 KB” style attachment links / meta
-  tmp.querySelectorAll("a").forEach(a=>{
-    const txt = (a.textContent||"").trim().toLowerCase();
-    const href = a.getAttribute("href")||"";
-    const looksImageLabel = /^image\d+x\d+/.test(txt) || /kb$/.test(txt);
-    const looksAttachment = a.classList.contains("attachment") || a.classList.contains("lightbox");
-    const isImageFile = /\.(jpg|jpeg|png|gif|webp|avif)(\?|$)/i.test(href);
-    if (looksImageLabel || looksAttachment || isImageFile){
-      // keep actual <img> tags, but drop orphan “image123x…” labels
-      if (!a.querySelector("img")) a.remove();
-    }
-  });
-  tmp.querySelectorAll(".meta, .filename, figcaption").forEach(n=>{
-    const t = (n.textContent||"").trim().toLowerCase();
-    if (/^image\d+x\d+/.test(t) || /kb$/.test(t)) n.remove();
+  // drop “image1536x...” onebox/attachments
+  tmp.querySelectorAll('a[href*="image"][href$=".jpg"], a[href*="image"][href$=".png"], a[href*="image"]').forEach(a=>{
+    if (/image\d+x\d+/i.test(a.textContent||"")) a.remove();
   });
 
-  // rewrite community links via redirect
+  // forum topic links -> go redirecter (improves in-iframe navigation),
+  // leave my.home-assistant.io import links untouched
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
-    const href = a.getAttribute("href");
     try{
-      const u = new URL(href);
+      const u = new URL(a.href);
       const parts = u.pathname.split("/").filter(Boolean);
-      const tIdx = parts.indexOf("t");
-      if (tIdx !== -1){
+      const idx = parts.indexOf("t");
+      if (idx !== -1){
         let slug = "", id = "";
-        if (parts[tIdx+1] && /^\d+$/.test(parts[tIdx+1])) id = parts[tIdx+1];
-        else { slug = (parts[tIdx+1]||""); id = (parts[tIdx+2]||"").replace(/\D/g,""); }
+        if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) id = parts[idx+1];
+        else { slug = parts[idx+1]||""; id = (parts[idx+2]||"").replace(/\D+/g,""); }
         if (id){
-          const qs = new URLSearchParams({ tid: id, slug }).toString();
-          a.href = `${API}/go?${qs}`;
-          a.addEventListener("click",(ev)=>{ ev.preventDefault(); openExternal(a.href); });
+          const qs = new URLSearchParams({ tid:id, slug }).toString();
+          a.setAttribute("href", `${API}/go?${qs}`);
+          a.setAttribute("target","_blank");
+          a.setAttribute("rel","noopener");
         }
       }
     }catch{}
   });
 
-  // open MyHA redirects in new tab
-  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    a.target = "_blank"; a.rel="noopener";
-  });
-
-  container.innerHTML = "";
-  while (tmp.firstChild) container.appendChild(tmp.firstChild);
+  return tmp.innerHTML;
 }
 
-/* ---------- search scoring ---------- */
-function tokenize(q){
-  return (q||"").toLowerCase().replace(/[^\p{L}\p{N} ]+/gu," ").split(/\s+/).filter(Boolean);
+/* persistent expanded state */
+const expandedMap = new Map();   // postId -> boolean
+const cookedCache = new Map();   // postId -> sanitized cooked HTML
+
+/* -------- creators footer -------- */
+function footerSpin(show=true){
+  const s = $("#creators-spin");
+  if (s) s.style.opacity = show ? "1" : "0";
 }
-function scoreItem(item, tokens){
-  if (!tokens.length) return 1;
-  const hay = (item._searchText || "").toLowerCase();
-  let s = 0; for (const t of tokens) if (hay.includes(t)) s++;
-  return s;
+function renderCreatorsFooter(stats){
+  const root = $("#creators-footer");
+  if (!root) return;
+  root.innerHTML = `
+    <div class="contrib-grid">
+      <section class="contrib-card">
+        <div class="contrib-head">Most Popular Blueprint</div>
+        <div class="author">${esc(stats.popular.author || "-")}</div>
+        <div class="desc">${esc(stats.popular.title || "-")}</div>
+      </section>
+      <section class="contrib-card">
+        <div class="contrib-head">Most Uploaded Blueprints</div>
+        <div class="author">${esc(stats.uploader.name || "-")}</div>
+        <div class="desc"><span class="count-chip">${stats.uploader.count ?? 0}</span></div>
+      </section>
+      <section class="contrib-card">
+        <div class="contrib-head">Most Recent Upload</div>
+        <div class="author">${esc(stats.recent.author || "-")}</div>
+        <div class="desc">${esc(stats.recent.title || "-")}</div>
+      </section>
+    </div>`;
 }
 
-/* ---------- Spotlight model ---------- */
-const spotlight = {
-  popular: null,
-  recent:  null,
-  counts:  new Map(),
-  topAuthor(){
-    let a=null,c=0;
-    for (const [k,v] of this.counts){ if (v>c){ a=k; c=v; } }
-    return a?{author:a,count:c}:null;
+/* compute footer from items we already loaded */
+function computeCreatorStats(items){
+  const byAuthor = new Map();
+  let mostLiked = null, mostRecent = null;
+
+  for (const it of items){
+    const a = it.author || "—";
+    byAuthor.set(a, (byAuthor.get(a)||0) + 1);
+
+    if (!mostLiked || (it.likes || 0) > (mostLiked.likes || 0)) mostLiked = it;
+    if (!mostRecent || (new Date(it.created_at||it.updated_at||0) > new Date(mostRecent.created_at||mostRecent.updated_at||0)))
+      mostRecent = it;
   }
-};
+  let uploader = {name:"—", count:0};
+  for (const [name,count] of byAuthor) if (count > uploader.count) uploader = {name,count};
 
-/* ---------- caches & state ---------- */
-const detailCache = new Map();   // id -> { html, importCnt }
-const openState = new Set();     // expanded cards by id
-
-/* ---------- card renderer ---------- */
-function tagPills(tags){
-  const set = [];
-  (tags||[]).forEach(t=>{
-    const v=(t||"").toString().trim();
-    if (v && !set.includes(v)) set.push(v);
-  });
-  if (!set.length) return "";
-  return `<div class="tags">${set.slice(0,5).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
-}
-function formatLikes(n){
-  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1)}M`.replace(/\.0$/,"M");
-  if (n >= 1_000) return `${(n/1_000).toFixed(1)}k`.replace(/\.0$/,"k");
-  return `${n}`;
+  return {
+    popular: { title: mostLiked?.title, author: mostLiked?.author },
+    uploader,
+    recent:  { title: mostRecent?.title, author: mostRecent?.author }
+  };
 }
 
-function renderCard(it){
+/* ---------------- card rendering ---------------- */
+function makeCard(it){
   const el = document.createElement("article");
   el.className = "card";
+  el.dataset.id = it.id;
 
-  const title = sanitizeTitle(it.title || "");
-  const author = it.author ? `by ${esc(it.author)}` : "";
-  const likes  = toNum(it.likes || it.like_count || 0);
-
-  const tagsTxt = (it.tags || []).join(" ");
-  it._searchText = `${title} ${it.excerpt||""} ${tagsTxt}`;
+  const liked = it.likes ?? 0;
+  const showGreyImport = (it.import_count || 0) > 1;  // multiple import badges inside cooked
 
   el.innerHTML = `
-    <h3 class="card__title">${esc(title)}</h3>
-    ${author ? `<div class="author">${author}</div>` : ""}
+    <h3 class="title">${esc(it.title)}</h3>
+    ${it.author ? `<div class="meta">by ${esc(it.author)} <span class="pill likes">${esc(formatLikes(liked))} <b>Liked This</b></span></div>` : ""}
     ${tagPills([...(it.tags||[])])}
-    <div class="desc-wrap" id="desc-${it.id}">
-      <div class="desc">${esc(it.excerpt || "")}</div>
+    <div class="desc-box" id="desc-${it.id}">
+      ${esc(it.excerpt || "No description")}
     </div>
-
-    <div class="card__footer">
-      <div class="likes-pill"><span class="icon-heart"></span>${formatLikes(likes)} <b>Liked This</b></div>
-      <a class="myha-btn" id="cta-${it.id}" data-open="${esc(it.import_url)}">
-        <sl-icon name="house"></sl-icon>
-        Import to Home Assistant
-      </a>
+    <div class="row-actions">
+      <button class="readmore" data-read="${it.id}" type="button">Read more</button>
+      ${showGreyImport
+        ? `<button class="cta gray" data-open="desc:${it.id}">Read description</button>`
+        : `<button class="cta" data-import="${esc(it.import_url||"")}">Import to Home Assistant</button>`
+      }
     </div>
-
-    <button class="toggle" id="tgl-${it.id}" type="button">Read more</button>
   `;
 
-  const wrap   = el.querySelector(`#desc-${it.id}`);
-  const toggle = el.querySelector(`#tgl-${it.id}`);
-  const cta    = el.querySelector(`#cta-${it.id}`);
-  let expanded = openState.has(it.id);
-
-  function setCTAForMultiple(){
-    cta.classList.add("disabled");
-    cta.removeAttribute("data-open");
-    cta.textContent = "Read Description";
-  }
-  function setCTAForSingle(){
-    cta.classList.remove("disabled");
-    if (it.import_url) cta.setAttribute("data-open", it.import_url);
-    cta.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
-  }
-
-  async function expandNow(){
-    if (expanded) return;
-    expanded = true; openState.add(it.id);
-    toggle.disabled = true;
-    try{
-      if (!detailCache.has(it.id)){
-        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-        const cooked = data.cooked || "<em>No content.</em>";
-        const importCnt = (cooked.match(/my\.home-assistant\.io\/redirect\/blueprint_import/gi)||[]).length;
-        detailCache.set(it.id, { html: cooked, importCnt });
-      }
-      const { html, importCnt } = detailCache.get(it.id);
-      const holder = document.createElement("div");
-      setPostHTMLInto(holder, html);
-      wrap.innerHTML = "";
-      wrap.appendChild(holder);
-      toggle.textContent = "Less";
-      if (importCnt > 1) setCTAForMultiple();
-      else setCTAForSingle();
-    }catch(e){
-      wrap.innerHTML = `<div class="desc"><em>Failed to load post: ${esc(String(e.message||e))}</em></div>`;
-      toggle.textContent = "Less";
-    }finally{
-      toggle.disabled = false;
-    }
-  }
-  function collapseNow(){
-    expanded = false; openState.delete(it.id);
-    wrap.innerHTML = `<div class="desc">${esc(it.excerpt || "")}</div>`;
-    toggle.textContent = "Read more";
-  }
-
-  toggle.addEventListener("click", ()=> expanded ? collapseNow() : expandNow());
-  el.addEventListener("dblclick",(e)=>{
-    if (e.target.closest("a,button")) return;
-    expanded ? collapseNow() : expandNow();
+  // double-click anywhere on the card toggles the same read/open
+  el.addEventListener("dblclick", async (ev)=>{
+    // don’t trigger when double-clicking a link within cooked HTML
+    if (ev.target.closest("a")) return;
+    const id = it.id;
+    await toggleDesc(id, it, el);
   });
 
-  el.addEventListener("click",(ev)=>{
-    const a = ev.target.closest("[data-open]");
-    if (!a || a.classList.contains("disabled")) return;
-    ev.preventDefault();
-    openExternal(a.getAttribute("data-open"));
+  // read more
+  el.querySelector('[data-read]')?.addEventListener("click", async ()=>{
+    await toggleDesc(it.id, it, el);
   });
 
-  // restore expanded content if user had it open and list re-rendered
-  if (expanded){
-    (async ()=>{ await expandNow(); })();
-  }
+  // import (direct, no interstitial)
+  el.querySelector('[data-import]')?.addEventListener("click", (ev)=>{
+    const url = ev.currentTarget.getAttribute("data-import");
+    if (url) openDirect(url);
+  });
+
+  // if button says “Read description”
+  el.querySelector('[data-open^="desc:"]')?.addEventListener("click", async ()=>{
+    await toggleDesc(it.id, it, el, true);
+  });
 
   return el;
 }
 
-/* ---------- Spotlight UI ---------- */
-function updateSpotlightUI(root, stateReady){
-  const s = $("#spot-popular");
-  const u = $("#spot-uploaded");
-  const r = $("#spot-recent");
-  const spinner = $("#spot-spin");
-  if (!s || !u || !r) return;
-
-  if (!stateReady){
-    s.innerHTML = u.innerHTML = r.innerHTML = "";
-    if (spinner) spinner.style.display = "block";
-    return;
-  }
-  if (spinner) spinner.style.display = "none";
-
-  if (spotlight.popular){
-    const it = spotlight.popular;
-    s.innerHTML = `
-      <div class="spot-head">Most Popular Blueprint</div>
-      <div class="spot-author">${esc(it.author||"")}</div>
-      <div class="spot-title">${esc(sanitizeTitle(it.title||""))}</div>
-    `;
-  }
-  const top = spotlight.topAuthor();
-  if (top){
-    u.innerHTML = `
-      <div class="spot-head">Most Uploaded Blueprints</div>
-      <div class="spot-author">${esc(top.author)}</div>
-      <div class="spot-meta">${top.count} Blueprints</div>
-    `;
-  }
-  if (spotlight.recent){
-    const it = spotlight.recent;
-    r.innerHTML = `
-      <div class="spot-head">Most Recent Upload</div>
-      <div class="spot-author">${esc(it.author||"")}</div>
-      <div class="spot-title">${esc(sanitizeTitle(it.title||""))}</div>
-    `;
-  }
+function tagPills(tags){
+  const set = [];
+  (tags||[]).forEach(t => { const v=(t||"").toString().trim(); if(v && !set.includes(v)) set.push(v); });
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* ---------- main ---------- */
-function boot(){
-  const list     = $("#list");
-  const empty    = $("#empty");
-  const errorB   = $("#error");
-  const searchEl = $("#search");
-  const sortSel  = $("#sort");
-  const refresh  = $("#refresh");
-  const tagmenu  = $("#tagmenu");
-  const tagbtn   = $("#tagbtn");
-  const sentinel = $("#sentinel");
+function formatLikes(n){
+  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}m`;
+  if (n >= 1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
+  return String(n);
+}
 
-  let page = 0, hasMore = true, loading=false;
-  let items = [];
-  let qText = "";
-  let sort = "likes";       // likes | new | title
+/* expand/collapse one dark description box in place */
+async function toggleDesc(id, it, card, forceOpen=false){
+  const box = card.querySelector(`#desc-${id}`);
+  const nowExpanded = forceOpen ? true : !expandedMap.get(id);
+
+  if (nowExpanded){
+    if (!cookedCache.has(id)){
+      try{
+        const data = await fetchJSON(`${API}/topic?id=${id}`);
+        const cooked = sanitizeCookedHTML(data.cooked || "");
+        cookedCache.set(id, cooked);
+      }catch(e){
+        cookedCache.set(id, `<em>Failed to load: ${esc(String(e.message||e))}</em>`);
+      }
+    }
+    box.innerHTML = cookedCache.get(id);
+    box.classList.add("open");
+  } else {
+    box.textContent = it.excerpt || "";
+    box.classList.remove("open");
+  }
+  expandedMap.set(id, nowExpanded);
+}
+
+/* ---------------- paging & boot ---------------- */
+async function boot(){
+  const list      = $("#list");
+  const sentinel  = $("#sentinel");
+  const errorBox  = $("#error");
+  const empty     = $("#empty");
+  const sortSel   = $("#sort");
+  const searchIn  = $("#search");
+  const tagMenu   = $("#tagmenu");
+  const tagBtn    = $("#tagbtn");
+
+  if (!list) return;
+
+  let page = 0, hasMore = true, loading = false;
+  let sort = "likes";
+  let q = "";
   let bucket = "";
 
-  function setError(msg){ errorB.style.display="block"; errorB.textContent=msg; }
-  function clearError(){ errorB.style.display="none"; errorB.textContent=""; }
+  // dynamic heading text
+  const headingEl = $("#heading");
 
-  function applyTagsTo(it){
-    if (it.tags && it.tags.length) return;
-    const base = `${(it.title||"")} ${it.excerpt||""}`.toLowerCase();
-    it.tags = deriveTags(base);
-  }
-
-  function pushAndUpdateSpotlight(batch){
-    for (const it of batch){
-      it.title = sanitizeTitle(it.title||"");
-      applyTagsTo(it);
-      const lk = toNum(it.likes||it.like_count);
-      if (!spotlight.popular || lk > toNum(spotlight.popular.likes||spotlight.popular.like_count)) {
-        spotlight.popular = it;
-      }
-      const t = toNum(it.created_ts || it.created || it.id || 0);
-      if (!spotlight.recent || t > toNum(spotlight.recent.created_ts || spotlight.recent.created || spotlight.recent.id || 0)){
-        spotlight.recent = it;
-      }
-      if (it.author) spotlight.counts.set(it.author, (spotlight.counts.get(it.author)||0)+1);
-    }
-    updateSpotlightUI($("#spotlight"), true);
-  }
-
-  async function fetchFilters(){
-    try{
-      const data = await fetchJSON(`${API}/filters`);
-      const tags = Array.isArray(data.tags) ? data.tags : TAG_ORDER;
-      tagmenu.innerHTML = "";
-      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
-      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
-      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
-      tagmenu.addEventListener("sl-select", async (ev)=>{
-        bucket = ev.detail.item.value || "";
-        tagbtn.textContent = bucket || "All tags";
-        await reflow();
-      });
-    }catch(e){ /* optional */ }
+  function setHeading(){
+    let title = (sort === "likes") ? "Most liked blueprints"
+              : (sort === "title") ? "Title A–Z"
+              : "Newest blueprints";
+    const parts = [];
+    if (q) parts.push(`query: “${q}”`);
+    if (bucket) parts.push(bucket);
+    headingEl.textContent = parts.length ? `${title} • ${parts.join(" · ")}` : title;
   }
 
   async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
+    if (q)      url.searchParams.set("q_title", q);
+    if (sort)   url.searchParams.set("sort", sort);
+    if (bucket) url.searchParams.set("bucket", bucket);
     return await fetchJSON(url.toString());
   }
 
-  function tokenize(q){ return (q||"").toLowerCase().replace(/[^\p{L}\p{N} ]+/gu," ").split(/\s+/).filter(Boolean); }
-  function scoreItem(item, tokens){
-    if (!tokens.length) return 1;
-    const hay = (item._searchText||"").toLowerCase();
-    let s = 0; for (const t of tokens) if (hay.includes(t)) s++; return s;
-  }
+  async function load(initial=false){
+    if (loading || (!hasMore && !initial)) return;
+    loading = true; errorBox.style.display="none";
 
-  function recomputeAndRender(){
-    const tokens = tokenize(qText);
-    let pool = items.slice();
-    if (bucket) pool = pool.filter(it => (it.tags||[]).includes(bucket));
-    pool = pool.map(it => ({ it, sc: scoreItem(it, tokens) }))
-               .filter(({sc}) => (tokens.length ? sc>0 : true));
-    if (sort === "new") pool.sort((a,b)=> toNum((b.it.created_ts||b.it.created||b.it.id)) - toNum((a.it.created_ts||a.it.created||a.it.id))).reverse();
-    else if (sort === "title") pool.sort((a,b)=> a.it.title.localeCompare(b.it.title));
-    else pool.sort((a,b)=> toNum(b.it.likes||b.it.like_count) - toNum(a.it.likes||a.it.like_count));
-
-    list.innerHTML = "";
-    if (!pool.length){ empty.style.display="block"; return; }
-    empty.style.display="none";
-    for (const {it} of pool) list.appendChild(renderCard(it));
-  }
-
-  async function loadPage(p){
-    if (loading) return;
-    loading = true; clearError();
     try{
-      const data = await fetchPage(p);
-      const batch = (data.items || []).map(it => {
-        it.tags = (it.tags || []).slice(0,4);
-        return it;
-      });
-      batch.forEach(applyTagsTo);
-      items.push(...batch);
+      const data = await fetchPage(page);
+      const items = data.items || [];
       hasMore = !!data.has_more;
-      pushAndUpdateSpotlight(batch);
-      recomputeAndRender();
+
+      if (initial){
+        list.innerHTML = "";
+        empty.style.display = items.length ? "none":"block";
+      }
+
+      // append cards
+      for (const it of items) list.appendChild(makeCard(it));
+
+      // fill footer from the first page only (enough to be useful + fast)
+      if (page === 0){
+        footerSpin(true);
+        const stats = computeCreatorStats(items);
+        renderCreatorsFooter(stats);
+        footerSpin(false);
+      }
+
+      page += 1;
     }catch(e){
-      setError(`Failed to load: ${String(e.message||e)}`);
+      errorBox.textContent = `Failed to load: ${String(e.message||e)}`;
+      errorBox.style.display="block";
     }finally{
       loading = false;
     }
   }
 
-  async function loadAll(){
-    page = 0; hasMore = true; items = [];
-    updateSpotlightUI($("#spotlight"), false);
-    await loadPage(page);
-    (async ()=>{
-      while (hasMore){
-        await sleep(400);
-        page += 1;
-        await loadPage(page);
-      }
-    })();
+  async function reloadAll(){
+    page=0; hasMore=true; list.innerHTML=""; expandedMap.clear();
+    setHeading();
+    await load(true);
   }
 
-  // UI
-  if (searchEl){
-    const onSearch = debounce(()=>{ qText = (searchEl.value||"").trim(); recomputeAndRender(); }, 160);
-    searchEl.addEventListener("sl-input", onSearch);
-    searchEl.addEventListener("sl-clear", onSearch);
+  // sort dropdown
+  if (sortSel){
+    sortSel.addEventListener("sl-change", async ()=>{
+      sort = sortSel.value || "likes";
+      await reloadAll();
+    });
   }
-  if (sortSel) sortSel.addEventListener("sl-change", ()=>{ sort = sortSel.value || "likes"; recomputeAndRender(); });
-  if (refresh) refresh.addEventListener("click", async ()=>{ await loadAll(); });
 
+  // search (title/desc already handled server-side in your API; here we pass q_title as before)
+  if (searchIn){
+    const onS = debounce(async ()=>{
+      q = (searchIn.value||"").trim();
+      await reloadAll();
+    }, 280);
+    searchIn.addEventListener("sl-input", onS);
+    searchIn.addEventListener("sl-clear", onS);
+  }
+
+  // tags
+  try{
+    const f = await fetchJSON(`${API}/filters`);
+    const tags = Array.isArray(f.tags) ? f.tags : [];
+    tagMenu.innerHTML = "";
+    const mk = (v,l)=>`<sl-menu-item value="${esc(v)}">${esc(l)}</sl-menu-item>`;
+    tagMenu.insertAdjacentHTML("beforeend", mk("","All tags"));
+    tags.forEach(t=> tagMenu.insertAdjacentHTML("beforeend", mk(t,t)));
+    tagMenu.addEventListener("sl-select", async (ev)=>{
+      bucket = ev.detail.item.value || "";
+      tagBtn.textContent = bucket || "All tags";
+      await reloadAll();
+    });
+  }catch{}
+
+  // infinite scroll
   if (sentinel){
-    const io = new IntersectionObserver(e=>{
-      if (e[0]?.isIntersecting && hasMore && !loading){ page += 1; loadPage(page); }
-    }, { rootMargin: "800px" });
+    const io = new IntersectionObserver((e)=>{ if (e[0].isIntersecting) load(false); }, {rootMargin:"900px"});
     io.observe(sentinel);
   }
 
-  fetchFilters();
-  loadAll();
+  setHeading();
+  await load(true);
 }
 
+/* -------------- CSS helpers injected -------------- */
+const style = document.createElement("style");
+style.textContent = `
+  .desc-box{
+    background: rgba(12,24,58,.75);
+    border: 1px solid rgba(255,255,255,.15);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+    color:#e8f1ff; padding:12px 14px; border-radius:12px;
+    margin: 6px 0 8px; max-height: 132px; overflow: hidden;
+    transition: max-height .25s ease;
+  }
+  .desc-box.open{ max-height: 9999px; }
+  .row-actions{ display:flex; gap:10px; align-items:center; margin:8px 0 2px; }
+  .cta{ background:linear-gradient(135deg,#00b2ff,#0a84ff); color:#032149;
+       border:1px solid rgba(255,255,255,.35); border-radius:999px;
+       padding:10px 14px; font-weight:800; }
+  .cta.gray{ background:#6d7a92; color:#f6f8ff; }
+  .pill.likes{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; margin-left:8px; }
+  .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 6px; }
+  .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
+  /* footer */
+  #creators-footer{ position:fixed; left:0; right:0; bottom:0; z-index:5;
+    background:linear-gradient(180deg, rgba(10,20,52,.86), rgba(8,18,46,.94));
+    border-top:1px solid rgba(255,255,255,.15); padding:12px 14px 14px; }
+  .contrib-grid{ display:grid; gap:10px; grid-template-columns:repeat(3,1fr); max-width:1200px; margin:0 auto; }
+  .contrib-card{ border:1px solid rgba(255,255,255,.18); border-radius:14px; padding:12px;
+    background:linear-gradient(180deg, rgba(12,24,58,.82), rgba(9,20,50,.88)); }
+  .contrib-head{ font-weight:900; margin-bottom:6px; }
+  #creators-spin{ display:block; width:12px; height:12px; border-radius:999px; border:2px solid #9dd1ff; border-top-color:transparent;
+    margin:6px auto; animation: sp 1s linear infinite; opacity:0; }
+  @keyframes sp{ to { transform: rotate(360deg); } }
+  .author{ font-weight:800; }
+  .count-chip{ display:inline-block; padding:6px 10px; border-radius:999px; background:#0a84ff; color:#032149; border:1px solid #fff5; font-weight:800; }
+  body{ padding-bottom: 132px; } /* prevent footer overlap */
+`;
+document.head.appendChild(style);
+
+/* ------------ kick ------------- */
 document.addEventListener("DOMContentLoaded", boot);
