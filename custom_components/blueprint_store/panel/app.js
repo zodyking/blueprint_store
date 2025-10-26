@@ -41,14 +41,16 @@ function importButton(href){
       Import to Home Assistant
     </a>`;
 }
-function viewDescButton(){  // gray CTA that toggles description
+function viewDescButton(){
   return `
     <button class="myha-btn neutral" data-viewdesc="1" type="button">
       <sl-icon name="document-text"></sl-icon>
       View description
     </button>`;
 }
-function forumButton(href){
+function forumButtonRedirect(tid, slug){
+  const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
+  const href = `${API}/go?${qs}`;
   return `
     <a class="myha-btn secondary" href="${href}" target="_blank" rel="noopener noreferrer">
       <sl-icon name="box-arrow-up-right"></sl-icon>
@@ -57,7 +59,7 @@ function forumButton(href){
 }
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
-/* tags renderer (no blanks/dupes) */
+/* tags renderer */
 function tagPills(tags){
   const set = [];
   (tags || []).forEach(t => {
@@ -68,12 +70,12 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* Render cooked HTML safely and normalize MyHA banner */
+/* normalize post HTML */
 function setPostHTML(container, html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // Convert any big MyHA import banners into our compact pill
+  // compact MyHA banners
   tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
@@ -85,17 +87,16 @@ function setPostHTML(container, html){
     a.replaceWith(pill);
   });
 
-  // Always open links externally
   tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
 
   container.innerHTML = "";
   container.appendChild(tmp);
 }
 
-/* ---------- client-side cache for topic details ---------- */
+/* cache */
 const detailCache = new Map();
 
-/* ---------- card ---------- */
+/* card */
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
@@ -115,7 +116,7 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButton(it.topic_url)}   <!-- backend sends slugged URL -->
+      ${forumButtonRedirect(it.id, it.slug || "")}
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -153,7 +154,6 @@ function renderCard(it){
     }
   });
 
-  // If CTA is "View description" wire it to expand
   const viewBtn = el.querySelector('button[data-viewdesc="1"]');
   if (viewBtn){
     viewBtn.addEventListener("click", async (ev)=>{ ev.preventDefault(); await expandNow(); });
@@ -166,7 +166,7 @@ function appendItems(target, items){
   for (const it of items) target.appendChild(renderCard(it));
 }
 
-/* ---------- boot ---------- */
+/* boot */
 function boot(){
   const list   = $("#list");
   const empty  = $("#empty");
@@ -182,13 +182,12 @@ function boot(){
 
   if (!list) return;
 
-  // State
   let page = 0;
   let qTitle = "";
   let loading = false;
   let hasMore = true;
   let sort = "new";
-  let bucket = ""; // curated tag filter
+  let bucket = "";
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
   const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
@@ -197,7 +196,6 @@ function boot(){
     try{
       const data = await fetchJSON(`${API}/filters`);
       const tags = Array.isArray(data.tags) ? data.tags : [];
-      // Build menu: All + buckets
       tagmenu.innerHTML = "";
       const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
       tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
@@ -209,9 +207,7 @@ function boot(){
         await loadAllForSearch();
         if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
       });
-    }catch(e){
-      // silent; filter menu is optional
-    }
+    }catch(e){ /* optional */ }
   }
 
   async function fetchPage(p){
@@ -252,7 +248,6 @@ function boot(){
     }
   }
 
-  // Events
   if (search){
     const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); await loadAllForSearch(); }, 280);
     search.addEventListener("sl-input", onSearch);
@@ -272,8 +267,7 @@ function boot(){
     io.observe(sentinel);
   }
 
-  // Kickoff
-  fetchFilters();  // populate tag menu
+  fetchFilters();
   load(true);
 }
 
