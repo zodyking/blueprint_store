@@ -1,240 +1,147 @@
-/* Blueprint Store – UI glue
- * Scope: only fixes requested (stable sort, tag filter, likes pill, dark desc area,
- * dynamic heading, normalize import badges, contributors (shout-outs)) */
+/* Blueprint Store — UI glue
+ * Scope: only the requested fixes (single growable desc area; cleaned titles for Hall of Builders; centered/renamed section; blue→black bg is in CSS)
+ */
 const API = "/api/blueprint_store";
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => Array.from(document.querySelectorAll(s));
+const $  = (s) => document.querySelector(s);
 
 /* ---------- small helpers ---------- */
-const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-const sleep = (ms=0) => new Promise(r=> setTimeout(r, ms));
-const debounce = (fn, ms = 250) => { let t=0; return (...a) => { clearTimeout(t); t = setTimeout(()=> fn(...a), ms); }; };
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
+const sleep = (ms)=> new Promise(r=>setTimeout(r, ms));
+const debounce = (fn, ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
-async function fetchJSON(url, tries = 3) {
-  // retry 429 with backoff
-  let backoff = 550;
-  for (let i = 0; i < tries; i++) {
-    try { const r = await fetch(url); if (!r.ok) throw new Error(`${r.status} ${r.statusText}`); return r.json(); }
-    catch(e){
-      if (String(e).includes("429") && i < tries-1) { await sleep(backoff); backoff *= 2; continue; }
-      throw new Error(`Fetch ${url} failed: ${e}`);
+async function fetchJSON(url, tries=3){
+  let delay = 600;
+  for(let i=0;i<tries;i++){
+    try{
+      const res = await fetch(url);
+      if(!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+      const data = await res.json();
+      if (data && data.error) throw new Error(data.error);
+      return data;
+    }catch(e){
+      if (i < tries-1 && /429/.test(String(e))) { await sleep(delay + Math.random()*250); delay*=2; continue; }
+      throw e;
     }
   }
 }
 
-/* ---------- state ---------- */
-let page = 0, hasMore = true, loading = false;
-let qTitle = ""; let filterTag = ""; let sort = "new"; // 'new', 'likes', 'title'
-let likesMap = new Map(); // topic_id -> likes from list
-let authorCounts = new Map(); // author -> count
-let newestItem = null; // most recent by 'created' if available
-let topLiked = null;   // item with most likes
-
-/* ---------- UI bits ---------- */
-const listEl = $("#list");
-const emptyEl = $("#empty");
-const errEl = $("#error");
-const headingEl = $("#heading");
-const searchEl = $("#search");
-const sortSel = $("#sort");
-const tagMenu = $("#tagmenu");
-const tagBtn = $("#tagbtn");
-const tagDD = $("#tagdd");
-const refreshBtn = $("#refresh");
-const sentinel = $("#sentinel");
-
-/* ---------- title cleanup & likes format ---------- */
-function likePretty(n){
-  if (Number.isNaN(n)) return "0";
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  return `${n}`;
-}
-const EMOJI_START = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\p{Symbol}]+/u;
-function prettifyTitle(raw){
-  if (!raw) return "";
-  let s = raw.replace(/\[blueprint\]/i, "");
-  s = s.replace(EMOJI_START, "").trim();
-  // keep parentheses, drop other non-word punctuation
-  s = s.replace(/[^()\w\s\-:]/g, " ").replace(/\s{2,}/g, " ").trim();
-
-  // Title case while preserving all-caps tokens like ZHA, MQTT
-  s = s.split(/\s+/).map(w=>{
-    if (w.length <= 3 && w === w.toUpperCase()) return w; // ZHA, ESP, MQTT, etc.
-    return w.charAt(0).toUpperCase() + w.slice(1);
+/* ---------- Title parsing utilities (for cards & Hall of Builders) ---------- */
+function titleCaseSmart(s){
+  const keepCaps = /^(AI|CPU|GPU|ZHA|Z2M|MQTT|ZBMINI|ZHA|HA|ESP|RTSP|RGB)$/i;
+  return s.split(/\s+/).map(w=>{
+    if (keepCaps.test(w) && w === w.toUpperCase()) return w;
+    if (/^[A-Z0-9]{2,}$/.test(w)) return w;           // already caps
+    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
   }).join(" ");
-  // Fix “Long-term” -> “Long Term”
-  s = s.replace(/-Term\b/g, " Term");
-  return s;
+}
+function cleanTitle(raw){
+  if (!raw) return "";
+  let s = String(raw);
+  s = s.replace(/\[blueprint\]\s*/i, "");          // remove “[Blueprint]”
+  s = s.replace(/^[^A-Za-z(]+/, "");               // strip leading emojis/symbols
+  s = s.replace(/[^0-9A-Za-z()\- _:]/g, "");       // keep (), hyphen, space, colon, underscore
+  return titleCaseSmart(s).replace(/\s{2,}/g," ").trim();
 }
 
-/* ---------- dynamic heading ---------- */
-function updateHeading(){
-  const parts = [];
-  if (sort === "likes") parts.push("Most liked");
-  else if (sort === "title") parts.push("Title A–Z");
-  else parts.push("Newest");
+/* ---------- Recognition / “Hall of Builders” ---------- */
+function renderContrib(sectionStats){
+  const host = $("#contrib");
+  const grid = $("#contrib-grid");
+  if (!host || !grid) return;
 
-  if (filterTag) parts.push(`• ${filterTag}`);
-  if (qTitle) parts.push(`• “${qTitle}”`);
+  // Expect shape (provided by your backend): { most_popular:{author,title}, most_uploads:{author,count}, most_recent:{author,title} }
+  const mp = sectionStats?.most_popular || {};
+  const mu = sectionStats?.most_uploads || {};
+  const mr = sectionStats?.most_recent  || {};
 
-  headingEl.textContent = `${parts.join(" ")} blueprints`;
+  const cards = [
+    { label:"Most Popular Blueprint", author: mp.author || "—", sub: cleanTitle(mp.title || "—") },
+    { label:"Most Uploaded Blueprints", author: mu.author || "—", sub: `${mu.count || 0} blueprint(s)` },
+    { label:"Most Recent Upload", author: mr.author || "—", sub: cleanTitle(mr.title || "—") },
+  ];
+
+  grid.innerHTML = cards.map(c=>`
+    <div class="contrib-card">
+      <div class="contrib-title">${esc(c.label)}</div>
+      <div class="contrib-author">${esc(titleCaseSmart(c.author))}</div>
+      <div class="contrib-sub">${esc(c.sub)}</div>
+    </div>
+  `).join("");
+
+  host.style.display = "block";
 }
 
-/* ---------- tags (curated if server gives many) ---------- */
-async function initTags(){
-  try{
-    const data = await fetchJSON(`${API}/filters`);
-    const tags = Array.isArray(data?.tags) ? data.tags : [];
-    tagMenu.innerHTML = "";
-    const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
-    tagMenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
-    tags.forEach(t=> tagMenu.insertAdjacentHTML("beforeend", mk(t, t)));
+/* ---------- Cards ---------- */
+const detailCache = new Map();
 
-    tagMenu.addEventListener("sl-select", async (ev)=>{
-      filterTag = ev.detail.item.value || "";
-      tagBtn.textContent = filterTag || "All tags";
-      await reloadAll();
-      if (tagDD?.hide) tagDD.hide();
-    });
-  }catch{ /* optional */ }
+function likesPill(it){
+  const likeText = `${it.likes_str || it.likes || 0} Liked This`;
+  return `<span class="likes-pill"><i class="icon"></i>${esc(likeText)}</span>`;
 }
 
-/* ---------- fetch & aggregate ---------- */
-function trackContributors(items){
-  for (const it of items){
-    likesMap.set(it.id, it.likes ?? 0);
-    if (!topLiked || (it.likes ?? 0) > (topLiked.likes ?? 0)) topLiked = it;
-
-    const a = (it.author || "").trim();
-    if (a) authorCounts.set(a, (authorCounts.get(a) || 0) + 1);
-
-    if (!newestItem || (it.created || 0) > (newestItem.created || 0)) newestItem = it;
-  }
-}
-function renderContrib(){
-  // Most popular blueprint
-  if (topLiked){
-    $("#c_pop_author").textContent = topLiked.author || "—";
-    $("#c_pop_title").textContent = prettifyTitle(topLiked.title || "—");
-  }
-  // Most uploaded author
-  if (authorCounts.size){
-    let best = null, max = 0;
-    for (const [a,c] of authorCounts){ if (c>max){max=c; best=a;} }
-    $("#c_up_author").textContent = best || "—";
-    $("#c_up_count").textContent = max ? `${max} blueprint(s)` : "—";
-  }
-  // Most recent
-  if (newestItem){
-    $("#c_rec_author").textContent = newestItem.author || "—";
-    $("#c_rec_title").textContent = prettifyTitle(newestItem.title || "—");
-  }
-}
-
-async function fetchPage(p){
-  const url = new URL(`${API}/blueprints`, location.origin);
-  url.searchParams.set("page", String(p));
-  if (qTitle) url.searchParams.set("q_title", qTitle);
-  if (sort) url.searchParams.set("sort", sort);
-  if (filterTag) url.searchParams.set("bucket", filterTag);
-  return await fetchJSON(url.toString());
-}
-
-/* ---------- card rendering ---------- */
-function importButton(href){
-  return `
-    <a class="myha-inline" data-open="${esc(href)}" role="button" tabindex="0">
-      <sl-icon name="house"></sl-icon>
-      Import to Home Assistant
-    </a>`;
-}
-function statsPill(likes){
-  const n = likePretty(Number(likes||0));
-  return `<span class="stats-pill" aria-label="Likes">
-    <span class="icon-heart"></span>
-    <span class="stat">${n}</span>
-    <span class="lbl">Liked&nbsp;This</span>
-  </span>`;
-}
-
-function setPostHTML(container, html){
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html || "<em>Nothing to show.</em>";
-
-  // Normalize embedded "Import blueprint" banners to compact size
-  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    const href = a.getAttribute("href") || a.textContent || "#";
-    const pill = document.createElement("a");
-    pill.className = "myha-inline";
-    pill.setAttribute("data-open", href);
-    pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
-    a.replaceWith(pill);
+function tagPills(tags){
+  const set = [];
+  (tags || []).forEach(t => {
+    const v = (t || "").toString().trim();
+    if (v && !set.includes(v)) set.push(v);
   });
-
-  // intercept any data-open inside description
-  tmp.addEventListener("click", (ev)=>{
-    const a = ev.target.closest("[data-open]");
-    if (!a) return;
-    ev.preventDefault();
-    try { window.open(a.getAttribute("data-open"), "_blank", "noopener"); } catch {}
-  });
-
-  container.innerHTML = "";
-  container.appendChild(tmp);
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
 
-  const cleanTitle = prettifyTitle(it.title || "");
+  const title = cleanTitle(it.title);
+  const author = it.author ? `by ${titleCaseSmart(it.author)}` : "";
+
   el.innerHTML = `
     <div class="row">
-      <h3>${esc(cleanTitle)}</h3>
-      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
+      <h3>${esc(title)}</h3>
+      ${it.author ? `<span class="author">${esc(author)}</span>` : ""}
     </div>
 
-    <div class="desc-wrap"><p class="desc" id="desc-${it.id}">${esc(it.excerpt || "")}</p></div>
+    ${tagPills([it.bucket, ...(it.tags || []).slice(0,3)])}
+
+    <div class="desc-wrap" id="desc-${it.id}">
+      <div class="desc-teaser">${esc(it.excerpt || "")}</div>
+      <div class="desc-full" id="full-${it.id}"></div>
+    </div>
+
     <div class="toggle" data-id="${it.id}">Read more</div>
-    <div class="more" id="more-${it.id}"></div>
-
-    <div class="card__footer">
-      <div>${statsPill(it.likes)}</div>
-      <div>${importButton(it.import_url)}</div>
-    </div>
+    ${likesPill(it)}
   `;
 
-  // Read more / less grows the same area (shows full cooked below)
+  // Expand/Collapse
+  const wrap   = el.querySelector(`#desc-${it.id}`);
+  const fullEl = el.querySelector(`#full-${it.id}`);
   const toggle = el.querySelector(".toggle");
-  const more = el.querySelector(`#more-${it.id}`);
   let expanded = false;
 
-  async function expandNow(){
-    if (expanded) return;
-    expanded = true;
-    toggle.style.pointerEvents = "none";
-    try{
-      const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-      setPostHTML(more, data?.cooked || "<em>Failed to load post.</em>");
-      more.style.display = "block";
-      toggle.textContent = "Less";
-    }catch(e){
-      more.innerHTML = `<em>${esc(String(e.message||e))}</em>`;
-      more.style.display = "block";
-      toggle.textContent = "Less";
-    }finally{
-      toggle.style.pointerEvents = "";
+  async function ensureFullLoaded(){
+    if (!detailCache.has(it.id)) {
+      try{
+        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+        detailCache.set(it.id, data.cooked || "<em>Nothing to show.</em>");
+      }catch(e){
+        detailCache.set(it.id, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
+      }
     }
+    fullEl.innerHTML = detailCache.get(it.id);
   }
 
-  toggle.addEventListener("click", async ()=>{
-    if (expanded){
-      expanded = false;
-      more.style.display = "none";
+  toggle.addEventListener("click", async () => {
+    if (!expanded){
+      await ensureFullLoaded();
+      wrap.classList.add("expanded");
+      toggle.textContent = "Less";
+      expanded = true;
+    }else{
+      wrap.classList.remove("expanded");
       toggle.textContent = "Read more";
-    } else {
-      await expandNow();
+      expanded = false;
     }
   });
 
@@ -245,90 +152,136 @@ function appendItems(target, items){
   for (const it of items) target.appendChild(renderCard(it));
 }
 
-/* ---------- load flows ---------- */
-function clearAgg(){
-  likesMap.clear(); authorCounts.clear();
-  topLiked = null; newestItem = null;
-}
-async function load(initial=false){
-  if (loading || (!hasMore && !initial)) return;
-  loading = true; errEl.style.display = "none";
-
-  try{
-    const data = await fetchPage(page);
-    const items = data?.items ?? [];
-    hasMore = !!data?.has_more;
-
-    if (initial){
-      listEl.innerHTML = "";
-      if (emptyEl) emptyEl.style.display = items.length ? "none" : "block";
-      clearAgg();
-    }
-
-    appendItems(listEl, items);
-    trackContributors(items);
-    renderContrib();
-    page += 1;
-  }catch(e){
-    errEl.textContent = String(e.message||e);
-    errEl.style.display = "block";
-  }finally{
-    loading = false;
-  }
-}
-
-async function reloadAll(){
-  page = 0; hasMore = true;
-  updateHeading();
-  listEl.innerHTML = "";
-  clearAgg();
-  // Guaranteed full refill (iterate pages until exhausted)
-  let first = true;
-  while (hasMore){
-    await load(first);
-    first = false;
-    await sleep(6);
-  }
-}
-
-/* ---------- boot ---------- */
+/* ---------- Boot / Paging / Filters (unchanged behavior) ---------- */
 function boot(){
-  if (!listEl) return;
+  const list   = $("#list");
+  const empty  = $("#empty");
+  const errorB = $("#error");
+  const search = $("#search");
+  const sortSel = $("#sort");
+  const refreshBtn = $("#refresh");
+  const sentinel = $("#sentinel");
 
-  // search
-  if (searchEl){
-    const onSearch = debounce(async ()=>{
-      qTitle = (searchEl.value || "").trim();
-      await reloadAll();
-    }, 280);
-    searchEl.addEventListener("sl-input", onSearch);
-    searchEl.addEventListener("sl-clear", onSearch);
+  const tagdd = $("#tagdd");
+  const tagbtn = $("#tagbtn");
+  const tagmenu = $("#tagmenu");
+  const headingEl = $("#heading");
+
+  if (!list) return;
+
+  let page = 0;
+  let qTitle = "";
+  let loading = false;
+  let hasMore = true;
+  let sort = "new";
+  let bucket = "";
+
+  const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
+  const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
+
+  function updateHeading(){
+    let parts = [];
+    if (sort === "likes") parts.push("Most liked");
+    else if (sort === "title") parts.push("Title A–Z");
+    else parts.push("Newest");
+
+    if (bucket) parts.push(`• ${bucket}`);
+    if (qTitle) parts.push(`• “${qTitle}”`);
+
+    headingEl.textContent = parts.join(" ") + " blueprints";
   }
 
-  // sort (stabilized)
+  async function fetchFilters(){
+    try{
+      const data = await fetchJSON(`${API}/filters`);
+      const tags = Array.isArray(data.tags) ? data.tags : [];
+      tagmenu.innerHTML = "";
+      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
+      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
+      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
+      tagmenu.addEventListener("sl-select", async (ev)=>{
+        const val = ev.detail.item.value || "";
+        bucket = val;
+        tagbtn.textContent = bucket || "All tags";
+        updateHeading();
+        await loadAllForSearch();
+        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
+      });
+    }catch(e){ /* optional */ }
+  }
+
+  async function fetchContrib(){
+    try{
+      const data = await fetchJSON(`${API}/contrib`);
+      renderContrib(data || {});
+    }catch(e){ /* soft fail */ }
+  }
+
+  async function fetchPage(p){
+    const url = new URL(`${API}/blueprints`, location.origin);
+    url.searchParams.set("page", String(p));
+    if (qTitle) url.searchParams.set("q_title", qTitle);
+    if (sort)   url.searchParams.set("sort", sort);
+    if (bucket) url.searchParams.set("bucket", bucket);
+    return await fetchJSON(url.toString());
+  }
+
+  async function load(initial=false){
+    if (loading || (!hasMore && !initial)) return;
+    loading = true; clearError();
+    try{
+      const data = await fetchPage(page);
+      const items = data.items || [];
+      hasMore = !!data.has_more;
+      if (initial){
+        list.innerHTML = "";
+        if (empty) empty.style.display = items.length ? "none" : "block";
+      }
+      appendItems(list, items);
+      page += 1;
+    }catch(e){
+      setError(`Failed to load: ${String(e.message||e)}`);
+    }finally{
+      loading = false;
+    }
+  }
+
+  async function loadAllForSearch(){
+    page = 0; hasMore = true; list.innerHTML = ""; clearError();
+    let first = true;
+    while (hasMore) {
+      await load(first); first = false;
+      await sleep(6);
+    }
+  }
+
+  if (search){
+    const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); updateHeading(); await loadAllForSearch(); }, 280);
+    search.addEventListener("sl-input", onSearch);
+    search.addEventListener("sl-clear", onSearch);
+  }
   if (sortSel){
-    sortSel.addEventListener("sl-change", async ()=>{
-      const v = (sortSel.value || "new");
-      sort = (v === "likes" || v === "title") ? v : "new";
-      await reloadAll();
+    sortSel.addEventListener("sl-change", async () => {
+      const val = sortSel.value;
+      if (val === "likes" || val === "title" || val === "new") sort = val; // guard
+      updateHeading();
+      await loadAllForSearch();
     });
   }
-
-  // refresh (no outline)
   if (refreshBtn){
-    refreshBtn.addEventListener("click", async ()=> reloadAll());
+    refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
   }
 
-  // infinite scroll
   if (sentinel){
     const io = new IntersectionObserver((entries)=>{
-      if (entries[0]?.isIntersecting) load(false);
+      if (entries[0] && entries[0].isIntersecting) load(false);
     },{ rootMargin:"700px" });
     io.observe(sentinel);
   }
 
   updateHeading();
-  initTags();
+  fetchFilters();
+  fetchContrib();
   load(true);
 }
 
