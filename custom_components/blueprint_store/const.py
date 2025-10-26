@@ -20,8 +20,22 @@ PANEL_URL = f"{STATIC_BASE}/index.html"
 SIDEBAR_TITLE = "Blueprint Store"
 SIDEBAR_ICON = "mdi:clipboard-text-search-outline"
 
-# Curated categories shown in the UI
+# Curated categories shown in the UI (and used for server-side filtering)
 CURATED_BUCKETS = [
-    "notifications", "tts", "alarm", "camera", "lighting",
-    "presence", "climate", "media", "energy", "security", "other"
+    "Lighting",
+    "Climate & Ventilation",
+    "Security & Alarm",
+    "Safety (Smoke/CO/Leak)",
+    "Presence & Occupancy",
+    "Access & Locks",
+    "Cameras & Vision",
+    "Media & Entertainment",
+    "AI & Assistants",                 # NEW
+    "Announcements & Notifications",   # (TTS lives here)
+    "Energy & Power",
+    "Environment & Weather",
+    "Appliances & Utilities",
+    "Scheduling & Scenes",
+    "System & Maintenance",
+    "Other",
 ]
