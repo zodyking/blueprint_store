@@ -32,7 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE  = re.compile(r"\s+")
 
-def _excerpt(cooked_html: str, max_len: int = 300) -> str:
+def _excerpt(cooked_html: str, max_len: int = 340) -> str:
     txt = TAG_RE.sub(" ", cooked_html or "")
     txt = WS_RE.sub(" ", txt).strip()
     return (txt[: max_len - 1] + "…") if len(txt) > max_len else txt
@@ -53,28 +53,55 @@ async def _fetch_json(session, url):
         resp.raise_for_status()
         return await resp.json()
 
+def _maybe_int(s: str | None):
+    if not s:
+        return None
+    m = re.search(r"(\d[\d,._]*)", s)
+    if not m:
+        return None
+    return int(m.group(1).replace(",", "").replace("_", ""))
+
+def _guess_uses_from_cooked(cooked: str) -> int | None:
+    # Try common patterns around the MyHA button (best-effort)
+    # e.g. "... 1,234 users", "... 999 uses", or badge numbers in spans
+    for pat in (
+        r">\s*([\d,._]+)\s*users?\b", r">\s*([\d,._]+)\s*uses?\b",
+        r'data-users="(\d+)"', r'class="[^"]*myha[^"]*".{0,200}?>([\d,._]+)<'
+    ):
+        m = re.search(pat, cooked or "", flags=re.IGNORECASE | re.DOTALL)
+        if m:
+            return _maybe_int(m.group(1))
+    return None
+
 async def _topic_detail(session, topic_id: int):
-    """Return dict {import_url, excerpt, author} or None."""
+    """Return dict {import_url, excerpt, author, uses} or None."""
     data = await _fetch_json(session, f"{COMMUNITY_BASE}/t/{topic_id}.json")
     posts = data.get("post_stream", {}).get("posts", [])
     if not posts:
         return None
     cooked = posts[0].get("cooked", "") or ""
+    # Find the import link
     m = re.search(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked)
     if not m:
         return None
     import_href = html.unescape(m.group(1))
     if import_href.startswith("/"):
         import_href = urljoin("https://my.home-assistant.io", import_href)
-    author = (data.get("details", {}) or {}).get("created_by", {}) or {}
+
+    author_obj = (data.get("details", {}) or {}).get("created_by", {}) or {}
+    author = author_obj.get("username") or ""
+
+    uses = _guess_uses_from_cooked(cooked)  # best-effort
+
     return {
         "import_url": import_href,
         "excerpt": _excerpt(cooked),
-        "author": author.get("username") or "",
+        "author": author,
+        "uses": uses,
     }
 
-async def _list_page(hass: HomeAssistant, page: int, q: str | None):
-    """Fetch a category page; filter to topics with import buttons; server-side search."""
+async def _list_page(hass: HomeAssistant, page: int, q_title: str | None):
+    """Fetch a category page; keep only topics with import buttons; optional TITLE-ONLY filter."""
     session = async_get_clientsession(hass)
     primary = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
     fallback = f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}"
@@ -85,12 +112,16 @@ async def _list_page(hass: HomeAssistant, page: int, q: str | None):
 
     topics = (data.get("topic_list", {}) or data).get("topics", [])
     sem = asyncio.Semaphore(8)
-    items = []
+    out = []
 
     async def process(t):
         async with sem:
             tid = t["id"]
             title = t.get("title") or t.get("fancy_title") or f"Topic {tid}"
+            # TITLE-ONLY filter on the raw topic to avoid fetching details when not matching
+            if q_title:
+                if q_title.lower() not in title.lower():
+                    return
             try:
                 detail = await _topic_detail(session, tid)
             except Exception as e:
@@ -98,19 +129,14 @@ async def _list_page(hass: HomeAssistant, page: int, q: str | None):
                 return
             if not detail:
                 return
-            author = detail["author"]
-            excerpt = detail["excerpt"]
-            if q:
-                s = q.lower()
-                if s not in title.lower() and s not in excerpt.lower() and s not in (author or "").lower():
-                    return
-            items.append({
+            out.append({
                 "id": tid,
                 "title": title,
-                "author": author,
+                "author": detail["author"],
                 "topic_url": f"{COMMUNITY_BASE}/t/{tid}",
                 "import_url": detail["import_url"],
-                "excerpt": excerpt,
+                "excerpt": detail["excerpt"],
+                "uses": detail["uses"],
             })
 
     tasks = []
@@ -120,12 +146,15 @@ async def _list_page(hass: HomeAssistant, page: int, q: str | None):
     if tasks:
         await asyncio.gather(*tasks)
 
-    items.sort(key=lambda x: x["id"], reverse=True)
-    return items
+    out.sort(key=lambda x: x["id"], reverse=True)
+    return out
 
-# ---------- Views (public) ----------
+# -------- Views (public) --------
 class BlueprintsPagedView(HomeAssistantView):
-    """GET /api/blueprint_store/blueprints?page=0&q=..."""
+    """
+    GET /api/blueprint_store/blueprints?page=0&q_title=...   (title-only search)
+    Returns: {items:[...], page:N, has_more:bool}
+    """
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
     requires_auth = False
@@ -137,12 +166,12 @@ class BlueprintsPagedView(HomeAssistantView):
             page = max(0, int(request.query.get("page", "0")))
         except ValueError:
             page = 0
-        q = request.query.get("q")
+        q_title = request.query.get("q_title")  # Title-only!
         max_pages = int(_cfg(self.hass).get("max_pages", DEFAULT_MAX_PAGES))
         if page >= max_pages:
             return self.json({"items": [], "page": page, "has_more": False})
         try:
-            items = await _list_page(self.hass, page, q)
+            items = await _list_page(self.hass, page, q_title)
             has_more = (page + 1) < max_pages and len(items) > 0
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
@@ -181,7 +210,7 @@ async def _register(hass: HomeAssistant):
             component_name="iframe",
             sidebar_title=SIDEBAR_TITLE,
             sidebar_icon=SIDEBAR_ICON,
-            frontend_url_path=DOMAIN,  # /blueprint_store in the sidebar
+            frontend_url_path=DOMAIN,
             config={"url": PANEL_URL},
             require_admin=False,
         )
