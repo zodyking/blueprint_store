@@ -1,4 +1,3 @@
-<!-- index.html -->
 <!doctype html>
 <html>
   <head>
@@ -113,6 +112,18 @@
       .more a{ color:#aee1ff; }
       .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
 
+      /* Stats pill (no link, no click) */
+      .stats{
+        display:inline-flex; align-items:center; gap:18px;
+        padding:10px 16px; border-radius:999px;
+        background: linear-gradient(180deg, rgba(255,255,255,.08), rgba(255,255,255,.03));
+        border:1px solid rgba(255,255,255,.28);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,.15);
+        font-weight:800; color:#eaf2ff;
+      }
+      .metric{ display:inline-flex; align-items:center; gap:8px; }
+      .metric sl-icon{ font-size:18px; }
+
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
     </style>
@@ -147,7 +158,7 @@
     <main>
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <div class="section-title">All blueprints</div>
+      <div id="sectionTitle" class="section-title">All blueprints</div>
       <div id="list" class="cards-wrap"></div>
 
       <p id="empty" style="display:none">No blueprints matched.</p>
@@ -156,6 +167,6 @@
     </main>
 
     <!-- cache-busted -->
-    <script src="./app.js?v=bs-open-3" defer></script>
+    <script src="./app.js?v=bs-stats-4" defer></script>
   </body>
 </html>
