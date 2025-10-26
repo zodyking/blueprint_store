@@ -16,8 +16,6 @@ async function fetchJSONRaw(url){
   if (data && data.error) throw new Error(data.error);
   return data;
 }
-
-// retry/backoff for 429
 async function fetchJSON(url, tries=3){
   let delay = 600;
   for(let i=0;i<tries;i++){
@@ -62,9 +60,28 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
+/* Render cooked HTML safely and normalize MyHA banner */
 function setPostHTML(container, html){
-  container.innerHTML = html || "<em>Nothing to show.</em>";
-  container.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html || "<em>Nothing to show.</em>";
+
+  // Convert any big MyHA import banners into our compact pill
+  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    const href = a.getAttribute("href") || a.textContent || "#";
+    const pill = document.createElement("a");
+    pill.className = "myha-btn myha-inline-import";
+    pill.href = href;
+    pill.target = "_blank";
+    pill.rel = "noopener noreferrer";
+    pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
+    a.replaceWith(pill);
+  });
+
+  // Always open links externally
+  tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
+
+  container.innerHTML = "";
+  container.appendChild(tmp);
 }
 
 /* ---------- client-side cache for topic details ---------- */
@@ -89,7 +106,7 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButton(it.topic_url)}
+      ${forumButton(it.topic_url)}   <!-- backend now sends slugged URL -->
       ${importButton(it.import_url)}
     </div>
   `;
@@ -135,6 +152,10 @@ function boot(){
   const refreshBtn = $("#refresh");
   const sentinel = $("#sentinel");
 
+  const tagdd = $("#tagdd");
+  const tagbtn = $("#tagbtn");
+  const tagmenu = $("#tagmenu");
+
   if (!list) return;
 
   // State
@@ -143,15 +164,39 @@ function boot(){
   let loading = false;
   let hasMore = true;
   let sort = "new";
+  let bucket = ""; // curated tag filter
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
   const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
+
+  async function fetchFilters(){
+    try{
+      const data = await fetchJSON(`${API}/filters`);
+      const tags = Array.isArray(data.tags) ? data.tags : [];
+      // Build menu: All + buckets
+      tagmenu.innerHTML = "";
+      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
+      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
+      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
+      tagmenu.addEventListener("sl-select", async (ev)=>{
+        const val = ev.detail.item.value || "";
+        bucket = val;
+        tagbtn.textContent = bucket || "All tags";
+        await loadAllForSearch();
+        // close dropdown
+        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
+      });
+    }catch(e){
+      // silent; filter menu is optional
+    }
+  }
 
   async function fetchPage(p){
     const url = new URL(`${API}/blueprints`, location.origin);
     url.searchParams.set("page", String(p));
     if (qTitle) url.searchParams.set("q_title", qTitle);
     if (sort) url.searchParams.set("sort", sort);
+    if (bucket) url.searchParams.set("bucket", bucket);
     return await fetchJSON(url.toString());
   }
 
@@ -197,7 +242,6 @@ function boot(){
     refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
   }
 
-  // Infinite scroll
   if (sentinel){
     const io = new IntersectionObserver((entries)=>{
       if (entries[0] && entries[0].isIntersecting) load(false);
@@ -206,6 +250,7 @@ function boot(){
   }
 
   // Kickoff
+  fetchFilters();  // populate tag menu
   load(true);
 }
 
