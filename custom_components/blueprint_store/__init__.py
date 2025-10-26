@@ -4,6 +4,7 @@ import os
 import re
 import inspect
 import logging
+import time
 from urllib.parse import urljoin
 
 from aiohttp import web, ClientError
@@ -31,6 +32,7 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# ------------------------------ helpers ------------------------------
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE  = re.compile(r"\s+")
 
@@ -39,17 +41,40 @@ def _excerpt(cooked_html: str, max_len: int = 340) -> str:
     txt = WS_RE.sub(" ", txt).strip()
     return (txt[: max_len - 1] + "…") if len(txt) > max_len else txt
 
+def _store(hass: HomeAssistant) -> dict:
+    return hass.data.setdefault(DOMAIN, {})
+
 def _cfg(hass: HomeAssistant):
-    store = hass.data.setdefault(DOMAIN, {})
-    return store.setdefault("cfg", {
+    st = _store(hass)
+    return st.setdefault("cfg", {
         "max_pages": DEFAULT_MAX_PAGES,
         "cache_seconds": DEFAULT_CACHE_SECONDS,
     })
 
-async def _fetch_json(session, url):
+def _topic_cache(hass: HomeAssistant) -> dict[int, dict]:
+    return _store(hass).setdefault("topic_cache", {})
+
+def _topic_locks(hass: HomeAssistant) -> dict[int, asyncio.Lock]:
+    return _store(hass).setdefault("topic_locks", {})
+
+def _rate_state(hass: HomeAssistant) -> dict:
+    # keep last-call timestamp for simple global pacing
+    return _store(hass).setdefault("rate_state", {"last": 0.0})
+
+async def _pace(hass: HomeAssistant, min_interval: float = 0.35):
+    """Ensure at least min_interval seconds between community calls."""
+    st = _rate_state(hass)
+    now = time.perf_counter()
+    wait = max(0.0, (st["last"] + min_interval) - now)
+    if wait:
+        await asyncio.sleep(wait)
+    st["last"] = time.perf_counter()
+
+async def _fetch_json(hass: HomeAssistant, session, url):
+    await _pace(hass)  # global pacing to avoid 429 bursts
     headers = {
         "Accept": "application/json",
-        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://www.home-assistant.io)",
+        "User-Agent": "HomeAssistant-BlueprintStore/0.6 (+https://www.home-assistant.io)",
         "Referer": f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}"
     }
     _LOGGER.debug("GET %s", url)
@@ -82,7 +107,7 @@ def _guess_uses_from_cooked(cooked: str) -> int | None:
             return _maybe_int(m.group(1))
     return None
 
-# -------- Curated category classifier (unchanged) --------
+# --------------------- bucket classifier (curated) --------------------
 _BUCKET_KEYWORDS = {
     "Lighting": ["light","lights","lamp","dimmer","brightness","color","wled","led","hue","lifx","switch (light)"],
     "Climate & Ventilation": ["climate","thermostat","hvac","heating","cooling","heatpump","ac","humidifier","dehumidifier","ventilation","fan","air conditioner"],
@@ -92,7 +117,7 @@ _BUCKET_KEYWORDS = {
     "Access & Locks": ["lock","unlock","door lock","garage","garage door","gate","door","window","contact","reed","keypad","entry"],
     "Cameras & Vision": ["camera","snapshot","record","frigate","object detection","rtsp","nvr","doorbell","face","recognition","ocr","image"],
     "Media & Entertainment": ["media","tv","cast","chromecast","sonos","speaker","spotify","plex","kodi","volume","music","shield"],
-    "AI & Assistants": ["ai","assistant","assist","agent","llm","large language model","openai","chatgpt","gpt","claude","gemini","ollama","whisper","stt","speech-to-text","asr","rhasspy","wyoming","piper","coqui","intent","nlu","conversation"],
+    "AI & Assistants": ["ai","assistant","assist","agent","llm","openai","chatgpt","gpt","claude","gemini","ollama","whisper","stt","speech-to-text","asr","rhasspy","wyoming","piper","coqui","intent","nlu","conversation"],
     "Announcements & Notifications": ["notify","notification","announce","announcement","tts","text-to-speech","say","speak","mobile_app","push","telegram","discord","slack","email","signal","matrix"],
     "Energy & Power": ["energy","power","solar","pv","inverter","battery","consumption","kwh","watt","utility_meter","price","tariff","charger","ev","vehicle","wallbox","smart plug"],
     "Environment & Weather": ["weather","forecast","rain","wind","storm","temperature","humidity","pressure","air quality","aqi","pm2.5","co2","uv","sun","sunrise","sunset"],
@@ -115,31 +140,56 @@ def _classify_bucket(title: str, tags: set[str]) -> str:
     if any(x in t for x in ("assistant"," llm"," ai","whisper","stt","speech-to-text","intent","nlu")): return "AI & Assistants"
     return "Other"
 
-async def _topic_detail(session, topic_id: int):
-    data = await _fetch_json(session, f"{COMMUNITY_BASE}/t/{topic_id}.json")
-    posts = data.get("post_stream", {}).get("posts", [])
-    if not posts:
-        return None
-    cooked = posts[0].get("cooked", "") or ""
-    m = re.search(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked)
-    if not m:
-        return None
-    import_href = html.unescape(m.group(1))
-    if import_href.startswith("/"):
-        import_href = urljoin("https://my.home-assistant.io", import_href)
-    author_obj = (data.get("details", {}) or {}).get("created_by", {}) or {}
-    author = author_obj.get("username") or ""
-    uses = _guess_uses_from_cooked(cooked)
-    return {
-        "import_url": import_href,
-        "excerpt": _excerpt(cooked),
-        "author": author,
-        "uses": uses,
-        "cooked": cooked,
-    }
+# --------------------- community fetchers (with cache) ----------------
+async def _topic_detail(hass: HomeAssistant, session, topic_id: int):
+    """Fetch full topic once and cache it (to avoid 429)."""
+    cache = _topic_cache(hass)
+    entry = cache.get(topic_id)
+    now = time.time()
+    ttl = int(_cfg(hass).get("cache_seconds", DEFAULT_CACHE_SECONDS))
+    if entry and (now - entry["ts"] < max(ttl, 1800)):  # at least 30 min
+        return entry["data"]
 
-# ---------- category listing (tries reliable endpoints in order) ----------
-async def _fetch_category_topics(session, page: int):
+    # one-flight-per-topic
+    locks = _topic_locks(hass)
+    lock = locks.setdefault(topic_id, asyncio.Lock())
+    async with lock:
+        entry = cache.get(topic_id)
+        if entry and (time.time() - entry["ts"] < max(ttl, 1800)):
+            return entry["data"]
+
+        data = await _fetch_json(hass, session, f"{COMMUNITY_BASE}/t/{topic_id}.json")
+        posts = data.get("post_stream", {}).get("posts", [])
+        if not posts:
+            cache[topic_id] = {"ts": now, "data": None}
+            return None
+
+        cooked = posts[0].get("cooked", "") or ""
+        m = re.search(r'href="([^"]+%s[^"]*)"' % re.escape(IMPORT_PATH_FRAGMENT), cooked)
+        if not m:
+            cache[topic_id] = {"ts": now, "data": None}
+            return None
+
+        import_href = html.unescape(m.group(1))
+        if import_href.startswith("/"):
+            import_href = urljoin("https://my.home-assistant.io", import_href)
+
+        author_obj = (data.get("details", {}) or {}).get("created_by", {}) or {}
+        author = author_obj.get("username") or ""
+        uses = _guess_uses_from_cooked(cooked)
+
+        payload = {
+            "import_url": import_href,
+            "excerpt": _excerpt(cooked),
+            "author": author,
+            "uses": uses,
+            "cooked": cooked,
+        }
+        cache[topic_id] = {"ts": time.time(), "data": payload}
+        return payload
+
+async def _fetch_category_topics(hass: HomeAssistant, session, page: int):
+    """Try reliable endpoints; return (topics, has_more)."""
     endpoints = [
         f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
         f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}",
@@ -148,7 +198,7 @@ async def _fetch_category_topics(session, page: int):
     last_error = None
     for url in endpoints:
         try:
-            data = await _fetch_json(session, url)
+            data = await _fetch_json(hass, session, url)
             tl = data.get("topic_list", data) or {}
             topics = tl.get("topics", []) or []
             more = bool(tl.get("more_topics_url") or tl.get("more_topics"))
@@ -163,9 +213,10 @@ async def _fetch_category_topics(session, page: int):
 
 async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket_filter: str | None):
     session = async_get_clientsession(hass)
-    topics, more_hint = await _fetch_category_topics(session, page)
+    topics, more_hint = await _fetch_category_topics(hass, session, page)
 
-    sem = asyncio.Semaphore(10)
+    # Lower concurrency to reduce burst on first page
+    sem = asyncio.Semaphore(4)
     out = []
 
     async def process(t):
@@ -178,7 +229,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
             if q_title and q_title.lower() not in title.lower():
                 return
             try:
-                detail = await _topic_detail(session, tid)
+                detail = await _topic_detail(hass, session, tid)
             except Exception as e:
                 _LOGGER.debug("topic %s detail failed: %s", tid, e)
                 return
@@ -204,7 +255,7 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
     out.sort(key=lambda x: x["id"], reverse=True)
     return out, more_hint
 
-# --------------------- Views ---------------------
+# ------------------------------ views ------------------------------
 class BlueprintsPagedView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
@@ -234,7 +285,6 @@ class BlueprintsPagedView(HomeAssistantView):
             elif sort == "uses":
                 items.sort(key=lambda x: (x["uses"] or 0), reverse=True)
             has_more = more_hint and ((page + 1) < max_pages)
-            _LOGGER.debug("Returning %s items (page %s)", len(items), page)
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
             _LOGGER.exception("Blueprint Store: paged list failed")
@@ -266,11 +316,10 @@ class BlueprintTopicView(HomeAssistantView):
             return self.json_message("Bad request", status_code=400)
         session = async_get_clientsession(self.hass)
         try:
-            data = await _fetch_json(session, f"{COMMUNITY_BASE}/t/{tid}.json")
-            title = data.get("title") or ""
-            posts = data.get("post_stream", {}).get("posts", [])
-            cooked = posts[0].get("cooked", "") if posts else ""
-            return self.json({"id": tid, "title": title, "cooked": cooked})
+            detail = await _topic_detail(self.hass, session, tid)
+            if not detail:
+                return self.json({"id": tid, "cooked": ""})
+            return self.json({"id": tid, "title": "", "cooked": detail["cooked"]})
         except Exception as e:
             _LOGGER.exception("Blueprint Store: topic fetch failed")
             return self.json({"id": tid, "cooked": "", "error": f"{type(e).__name__}: {e}"})
@@ -304,9 +353,9 @@ class BlueprintImagesStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
-# ---------------- Registration (idempotent, no removal) ----------------
+# ------------------------ registration (idempotent) -------------------
 async def _register_views_and_panel(hass: HomeAssistant):
-    store = hass.data.setdefault(DOMAIN, {})
+    store = _store(hass)
     lock: asyncio.Lock = store.setdefault("reg_lock", asyncio.Lock())
     async with lock:
         if store.get("registered"):
@@ -382,5 +431,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    hass.data.get(DOMAIN, {}).pop("registered", None)
+    _store(hass).pop("registered", None)
     return True
