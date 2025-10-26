@@ -6,7 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
     <!-- Shoelace -->
-    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
+    <script
+      type="module"
+      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
+    </script>
 
     <style>
       :root{
@@ -16,95 +19,114 @@
         --card-bd-hover:#9dd1ff66;
         --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1200px;
+
         --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
         --sl-panel-background-color: rgba(16,34,86,.98);
       }
-      *{box-sizing:border-box}
+
+      * { box-sizing: border-box; }
       body{
-        margin:0;color:var(--ink);
-        font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu,Arial;
-        background:linear-gradient(180deg,var(--blue-1),var(--blue-2)); min-height:100vh;
+        margin:0; color:var(--ink);
+        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
+        background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
+        min-height:100vh;
       }
       body::after{
-        content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+        content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
         background-image:
           linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
           linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
-        background-size:28px 28px;
+        background-size: 28px 28px;
       }
 
-      header{position:sticky;top:0;z-index:8;backdrop-filter:blur(8px);border-bottom:1px solid #ffffff22;}
-      .bar{max-width:var(--maxw);margin:0 auto;padding:8px 12px;display:grid;grid-template-columns:auto 1fr auto auto auto;gap:10px;align-items:center;}
-      .brand{display:flex;gap:10px;align-items:center;font-weight:900;}
-      .brand img{width:28px;height:28px;border-radius:6px;}
-
-      sl-input::part(base){background:transparent}
-      sl-input::part(input){color:#fff}
-
-      main{max-width:var(--maxw);margin:12px auto 44px;padding:0 12px;}
-      .banner{margin:8px 0 12px;border-radius:16px;overflow:hidden;box-shadow:var(--shadow);border:1px solid #ffffff22;}
-      .banner img{width:100%;display:block}
-
-      .section-title{margin:8px 0 8px;font-size:20px;font-weight:900;letter-spacing:.2px;}
-
-      .cards-wrap{position:relative}
-      .cards-wrap::before{
-        content:"";position:absolute;inset:-34px -18px -34px -18px;z-index:-1;
-        background: radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.18), transparent 60%),
-                    radial-gradient(60% 60% at 50% 100%, rgba(40,140,255,.18), transparent 65%);
-        filter:blur(18px);
+      header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
+      .bar{
+        max-width:var(--maxw); margin:0 auto; padding:8px 12px;
+        display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center;
       }
+      .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
+      .brand img{ width:28px; height:28px; border-radius:6px; }
 
-      .card{border-radius:18px;border:1px solid var(--card-bd);background:var(--card-bg);box-shadow:var(--shadow);padding:16px;margin:12px 0;overflow:hidden;}
-      .card:hover{border-color:var(--card-bd-hover);box-shadow:0 26px 60px rgba(30,140,255,.30);}
-      .row{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;}
-      .card h3{margin:0;font-size:18px;font-weight:900;}
-      .author{opacity:.92;font-weight:700;}
-      .tags{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0 10px;}
-      .tag{background:#0e2a66;border:1px solid #29539a;color:#cfe2ff;padding:2px 8px;border-radius:999px;font-size:12px;}
+      sl-input::part(base){ background:transparent; }
+      sl-input::part(input){ color:#fff; }
+      sl-input::part(form-control-label){ color:#fff; }
 
-      /* darker background just behind the description area */
-      .desc{
-        color:var(--muted); margin:8px 0 10px; line-height:1.55;
-        background:rgba(5,16,48,.55); border:1px solid rgba(255,255,255,.06);
-        border-radius:12px; padding:12px;
+      /* Tags + Refresh buttons WITHOUT outlines */
+      .plain::part(base){
+        background:transparent; color:#fff; border:none !important; box-shadow:none !important; padding-inline:10px;
       }
+      .plain::part(base):hover{ text-decoration: underline; }
 
-      .toggle{color:#cfe2ff;font-weight:700;cursor:pointer;user-select:none;background:transparent;border:0;padding:4px 0}
-      .more{display:none;margin-top:8px;border-top:1px solid rgba(255,255,255,.16);padding-top:8px}
-      .more img{max-width:100%;height:auto;border-radius:8px}
-      .more a{color:#aee1ff}
+      main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
+      .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
+      .banner img{ width:100%; display:block; }
 
+      .section-title{ margin:8px 0 12px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+
+      .card{
+        position:relative;
+        border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
+        box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
+      }
+      .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
+      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
+      .card h3{ margin:0; font-size:18px; font-weight:900; }
+      .author{ opacity:.92; font-weight:700; }
+      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
+      .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
+
+      /* single description box that expands in place */
+      .desc-box{
+        background: rgba(3, 12, 36, 0.35);
+        border: 1px solid rgba(180,210,255, .15);
+        border-radius: 14px;
+        padding: 12px;
+        margin-top: 6px;
+      }
+      .desc{ color:var(--muted); margin:0; line-height:1.55; }
+      .toggle{ margin-top:8px; color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; display:inline-block; }
+      .more{ display:none; margin-top:10px; }
+      .more :where(h1,h2,h3){ font-weight:800; }
+      .more img{ max-width:100%; height:auto; border-radius:8px; }
+      .more a{ color:#aee1ff; }
+      .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
+
+      .card__footer{ display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:10px; }
+
+      /* Likes pill bottom-left, not clickable */
       .stat-pill{
-        display:inline-flex;align-items:center;gap:10px;border:1px solid #7aa7ff4d;background:#0c1f54b0;
-        padding:8px 12px;border-radius:999px;font-weight:800;color:#eaf1ff;
+        position:absolute; left:14px; bottom:14px;
+        display:inline-flex; align-items:center; gap:10px;
+        padding:10px 14px; border-radius:999px; font-weight:800;
+        color:#eaf4ff;
+        background: linear-gradient(135deg, #1b2a6b, #2c57b8);
+        box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff3;
+        border: 1px solid rgba(255,255,255,.25);
+        pointer-events:none;
       }
-      .stat-pill .stat{display:inline-flex;align-items:center;gap:6px}
-      .stat-pill .sep{width:1px;height:18px;background:#ffffff33;border-radius:1px}
-      .stat-pill sl-icon{font-size:16px}
+      .stat-pill .label{ opacity:.85; font-weight:700; }
+      .stat-pill sl-icon{ font-size:1.1rem; }
 
-      .footer{display:flex;justify-content:flex-end;margin-top:12px}
-      .cta-import{
+      .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
-        display:inline-flex;align-items:center;gap:8px;
-        padding:10px 14px;border-radius:999px;font-weight:800;
-        color:#032149;text-decoration:none;
-        background:linear-gradient(135deg,var(--grad-a),var(--grad-b));
-        box-shadow:0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
-        border:1px solid rgba(255,255,255,.35);
+        display:inline-flex; align-items:center; gap:8px;
+        padding:10px 14px; border-radius:999px; font-weight:800;
+        color:#032149; text-decoration:none;
+        background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
+        box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
+        border: 1px solid rgba(255,255,255,.35);
       }
 
-      #error,#empty{text-align:center;color:#e7eefc}
-      #sentinel{height:60px}
+      #error, #empty{ text-align:center; color:#e7eefc; }
+      #sentinel{ height:60px; }
     </style>
   </head>
   <body>
     <header>
       <div class="bar">
         <div class="brand">
-          <img src="/blueprint_store_static/images/bps_logo.png" alt="Blueprint Store"/>
           <span>Blueprint Store</span>
         </div>
 
@@ -112,8 +134,7 @@
           <sl-icon name="search" slot="prefix"></sl-icon>
         </sl-input>
 
-        <!-- Hardened select: values are canonical keys only -->
-        <sl-select id="sort" hoist value="new">
+        <sl-select id="sort" value="new" hoist>
           <sl-option value="new">Newest</sl-option>
           <sl-option value="likes">Most liked</sl-option>
           <sl-option value="title">Title A–Z</sl-option>
@@ -131,14 +152,14 @@
     <main>
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <div id="sectionTitle" class="section-title">All blueprints</div>
-      <div id="list" class="cards-wrap"></div>
+      <div class="section-title" id="sectionTitle">All blueprints</div>
+      <div id="list"></div>
 
       <p id="empty" style="display:none">No blueprints matched.</p>
       <p id="error" style="display:none"></p>
       <div id="sentinel"></div>
     </main>
 
-    <script src="./app.js?v=views-patch-1" defer></script>
+    <script src="./app.js?v=fix-tags-desc-likes" defer></script>
   </body>
 </html>
