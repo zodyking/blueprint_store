@@ -47,16 +47,11 @@ function renderCard(it){
       <sl-button size="small" variant="default" pill class="forum">Forum post</sl-button>
     </div>
   `;
-  el.querySelector(".forum").addEventListener("click", (e) => {
-    e.preventDefault(); openExternal(it.topic_url);
-  });
+  el.querySelector(".forum").addEventListener("click", (e) => { e.preventDefault(); openExternal(it.topic_url); });
   return el;
 }
 
-function appendItems(target, items){
-  for (const it of items) target.appendChild(renderCard(it));
-}
-
+function appendItems(target, items){ for (const it of items) target.appendChild(renderCard(it)); }
 function setError(msg){ errorB.textContent = msg; errorB.style.display = "block"; }
 function clearError(){ errorB.style.display = "none"; errorB.textContent = ""; }
 
@@ -101,7 +96,6 @@ async function loadAllForSearch(){
   while (hasMore) {
     await load(total === 0);
     total = list.childElementCount;
-    // yield back to UI a bit
     await new Promise(r => setTimeout(r, 10));
   }
 }
@@ -137,17 +131,13 @@ function renderTagChips(){
     chip.setAttribute("selected", "");
     chip.textContent = tag;
     chip.addEventListener("click", async () => {
-      // toggle off when clicked
       const idx = activeTags.indexOf(tag);
       if (idx >= 0) { activeTags.splice(idx, 1); updateTagsSelect(); await loadAllForSearch(); }
     });
     chips.appendChild(chip);
   });
 }
-function updateTagsSelect(){
-  // keep the Shoelace <sl-select multiple> in sync with activeTags
-  tagsSel.value = [...activeTags];
-}
+function updateTagsSelect(){ tagsSel.value = [...activeTags]; }
 
 /* ---- Top 10 ---- */
 async function loadTop10(){
