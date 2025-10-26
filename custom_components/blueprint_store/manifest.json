@@ -1,12 +1,10 @@
 {
-  "domain": "blueprint_store",
-  "name": "Blueprint Store",
-  "version": "0.9.7",
-  "documentation": "https://github.com/zodyking/blueprint_store",
-  "issue_tracker": "https://github.com/zodyking/blueprint_store/issues",
-  "codeowners": ["@zodyking"],
+  "domain": "blueprint_browser",
+  "name": "Blueprint Browser",
+  "version": "0.1.0",
+  "documentation": "https://example.invalid/blueprint_browser",
+  "issue_tracker": "https://example.invalid/blueprint_browser/issues",
   "iot_class": "cloud_polling",
-  "dependencies": ["http", "frontend"],
-  "requirements": [],
-  "config_flow": true
+  "codeowners": ["@you"],
+  "requirements": []
 }
