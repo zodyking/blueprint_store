@@ -10,18 +10,16 @@
 
     <style>
       :root{
-        /* page background just a touch darker than the banner */
-        --page-blue:#0f57c8;           /* was deeper; now slightly lighter */
-        --page-blue-2:#0d47aa;
-        --grid-line: rgba(255,255,255,.10);
-
-        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
+        --ink:#e8f1ff;
+        --muted:#b9c7e6;
+        --card-bg: linear-gradient(180deg, rgba(10,20,52,.80), rgba(8,18,46,.88));
         --card-bd: rgba(170,200,255,.22);
         --card-bd-hover:#9dd1ff66;
         --shadow: 0 18px 50px rgba(6,16,50,.45);
-        --maxw: 1200px;
+        --grid-a: rgba(255,255,255,.11);
+        --grid-b: rgba(255,255,255,.10);
+        --maxw: 1100px;
 
-        /* Shoelace minor tweaks */
         --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
@@ -30,19 +28,17 @@
 
       * { box-sizing: border-box; }
       body{
-        margin:0; color:#e6f0ff;
+        margin:0; color:var(--ink);
         font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
-        background: var(--page-blue);
+        background: linear-gradient(180deg, #0e4db1 0%, #0c3e8f 40%, #0a2f70 100%);
         min-height:100vh;
       }
-      /* blueprint grid lines (unchanged look) */
       body::after{
         content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
-        background:
-          linear-gradient(to right, var(--grid-line) 1px, transparent 1px) 0 0/28px 28px,
-          linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px) 0 0/28px 28px,
-          radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.08), transparent 60%),
-          linear-gradient(180deg, var(--page-blue), var(--page-blue-2));
+        background-image:
+          linear-gradient(to right, var(--grid-a) 1px, transparent 1px),
+          linear-gradient(to bottom, var(--grid-b) 1px, transparent 1px);
+        background-size: 28px 28px;
       }
 
       header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
@@ -52,14 +48,9 @@
       }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
-
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
-      sl-input::part(form-control-label){ color:#fff; }
-
-      sl-button.plain::part(base){
-        background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
-      }
+      sl-button.plain::part(base){ background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px; }
       sl-button.plain::part(base):hover{ text-decoration: underline; }
 
       main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
@@ -67,51 +58,52 @@
       .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
 
-      .cards-wrap{ position:relative; }
-      .cards-wrap::before{
-        content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
-        background: radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.18), transparent 60%),
-                    radial-gradient(60% 60% at 50% 100%, rgba(40,140,255,.18), transparent 65%);
-        filter: blur(18px);
+      .spot-wrap{
+        margin:16px 0 10px; padding:14px; border:1px solid var(--card-bd); border-radius:16px; background:var(--card-bg);
+        box-shadow: var(--shadow);
       }
+      .spot-title{ text-align:center; font-weight:900; font-size:18px; margin:2px 0 2px; }
+      .spot-sub{ text-align:center; color:#cfe2ff; margin-bottom:10px; }
+      .contrib-grid{ display:grid; grid-template-columns: 1fr; gap:12px; }
+      @media (min-width: 860px){ .contrib-grid{ grid-template-columns: repeat(3, 1fr); } }
+      .contrib-card{ border:1px solid var(--card-bd); border-radius:12px; padding:12px; background:rgba(10,20,52,.65); min-height:120px; }
+      .contrib-head{ font-weight:900; font-size:14px; opacity:.95; }
+      .contrib-sub{ color:#cfe2ff; font-weight:800; margin-top:4px; }
+      .contrib-body{ margin-top:10px; }
+      .contrib-chip{
+        display:inline-block; padding:8px 12px; border-radius:999px; border:1px solid rgba(255,255,255,.25);
+        background:rgba(25,55,110,.6); font-weight:800;
+      }
+      #spot-spinner{ display:block; margin:6px auto 0; }
 
-      .section-title{ margin:8px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+      .section-title{ margin:14px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+      .cards-wrap{ position:relative; }
 
       .card{
         border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
-        box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
+        box-shadow: var(--shadow); padding:14px; margin:12px 0; overflow:hidden;
       }
       .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
-      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
-      .card h3{ margin:0; font-size:18px; font-weight:900; }
+      .card__head{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+      .card__title{ margin:0; font-size:18px; font-weight:900; }
       .author{ opacity:.92; font-weight:700; }
-
-      /* description block that grows/collapses */
-      .desc-wrap{ margin-top:10px; }
-      .desc-box{
-        background: rgba(6,16,50,.55);
-        border: 1px solid rgba(160,190,255,.18);
-        border-radius:12px;
-        padding:12px 14px;
-        line-height:1.55;
-        color:#dbe6ff;
-        transition:max-height .25s ease;
-      }
-
       .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
       .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
-      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
-      .card__footer{
-        display:flex; justify-content:space-between; align-items:center; margin-top:12px;
+
+      .desc-wrap{ position:relative; }
+      .desc{ background:rgba(4,14,42,.65); border:1px solid rgba(255,255,255,.12); padding:12px; border-radius:12px; line-height:1.55; margin:0; max-height:72px; overflow:hidden; }
+      .desc-wrap.open .desc{ max-height:none; }
+      .more{ margin-top:10px; border-top:1px solid rgba(255,255,255,.12); padding-top:10px; }
+      .readmore{
+        margin:8px 0 0; background:transparent; border:1px solid rgba(255,255,255,.25); color:#eaf4ff; border-radius:999px; padding:6px 10px; font-weight:800; cursor:pointer;
       }
 
-      .pill{
-        display:inline-flex; align-items:center; gap:10px;
-        border:1px solid rgba(200,220,255,.35); color:#eaf2ff;
-        padding:8px 14px; border-radius:999px; font-weight:800;
-        background: rgba(10,30,80,.35);
+      .card__foot{ display:flex; justify-content:space-between; align-items:center; margin-top:10px; }
+      .likepill{
+        display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px;
+        border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08); font-weight:800;
       }
-      .pill sl-icon{ font-size:18px; }
+      .icon-heart{ width:18px; height:18px; display:inline-block; mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23fff" d="M12 21s-6.716-4.35-9.428-7.062C-0.381 11.049-.343 7.42 2.1 4.979c2.053-2.053 5.383-1.99 7.393.02L12 7.505l2.507-2.506c2.01-2.01 5.34-2.073 7.393-.02 2.443 2.441 2.481 6.07-.472 8.959C18.716 16.65 12 21 12 21z"/></svg>') center/contain no-repeat; background:#fff; }
 
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
@@ -119,55 +111,12 @@
         padding:10px 14px; border-radius:999px; font-weight:800;
         color:#032149; text-decoration:none;
         background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
-        box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
         border: 1px solid rgba(255,255,255,.35);
       }
-      .myha-btn:active{ transform: translateY(1px); }
       .myha-btn.neutral{ --grad-a:#6d7a92; --grad-b:#4e5a74; color:#f6f8ff; }
-
-      .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
-      .more{ display:none; margin-top:10px; border-top:1px solid rgba(255,255,255,.16); padding-top:10px; }
-      .more :where(h1,h2,h3){ font-weight:800; }
-      .more img{ max-width:100%; height:auto; border-radius:8px; }
-      .more a{ color:#aee1ff; }
-      .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
+      .myha-icon{ width:18px; height:18px; display:inline-block; background:#032149; mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="%23000" d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>') center/contain no-repeat; }
 
       #error, #empty{ text-align:center; color:#e7eefc; }
-      #sentinel{ height:60px; }
-
-      /* Creators Spotlight container + spinner */
-      .contrib{
-        margin:16px 0 6px; padding:18px; border-radius:16px;
-        border:1px solid var(--card-bd);
-        background: linear-gradient(180deg, rgba(10,20,52,.68), rgba(8,18,46,.78));
-        box-shadow: var(--shadow);
-      }
-      .contrib-head{ display:flex; flex-direction:column; align-items:center; gap:8px; margin-bottom:10px; }
-      .contrib-title{ font-weight:900; font-size:18px; }
-      .contrib-sub{ color:#cfe2ff; opacity:.85; }
-      .contrib-grid{
-        display:grid; grid-template-columns: repeat(3, 1fr); gap:12px;
-      }
-      @media (max-width: 980px){ .contrib-grid{ grid-template-columns: 1fr; } }
-      .contrib-card{
-        border:1px solid rgba(165,195,255,.22);
-        border-radius:14px; padding:16px; background: rgba(8,18,46,.72);
-      }
-      .contrib-card h4{ margin:0 0 6px; font-size:14px; font-weight:900; }
-      .contrib-author{ font-weight:800; margin-bottom:6px; }
-
-      /* spinner */
-      .spinner {
-        width:36px; height:36px; border-radius:50%;
-        border:3px solid rgba(190,215,255,.25);
-        border-top-color:#aee1ff;
-        animation:spin 1s linear infinite;
-      }
-      @keyframes spin { to { transform:rotate(360deg); } }
-      .contrib-loading{ display:flex; align-items:center; justify-content:center; padding:20px 0; }
-
-      /* refresh + tag buttons without outlines */
-      sl-button.plain::part(base){ border:none !important; }
     </style>
   </head>
   <body>
@@ -198,16 +147,16 @@
     </header>
 
     <main>
-      <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
+      <div class="banner">
+        <img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner">
+      </div>
 
       <!-- Creators Spotlight -->
-      <section class="contrib" id="contrib">
-        <div class="contrib-head">
-          <div class="contrib-title">Creators Spotlight</div>
-          <div class="contrib-sub">Shout-outs to makers moving the community forward.</div>
-        </div>
-        <div id="cs-loading" class="contrib-loading"><div class="spinner"></div></div>
-        <div id="cs-grid" class="contrib-grid" style="display:none;"></div>
+      <section class="spot-wrap">
+        <div class="spot-title">Creators Spotlight</div>
+        <div class="spot-sub">Shout-outs to makers moving the community forward.</div>
+        <sl-spinner id="spot-spinner" style="font-size:28px"></sl-spinner>
+        <div id="spot" class="contrib-grid"></div>
       </section>
 
       <div class="section-title" id="heading">All blueprints</div>
@@ -215,9 +164,9 @@
 
       <p id="empty" style="display:none">No blueprints matched.</p>
       <p id="error" style="display:none"></p>
-      <div id="sentinel"></div>
     </main>
 
-    <script src="./app.js?v=bs-sort-stable+spinner+bg" defer></script>
+    <!-- cache-busted -->
+    <script src="./app.js?v=bs-tags-extended" defer></script>
   </body>
 </html>
