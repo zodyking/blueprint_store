@@ -11,7 +11,7 @@
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (minimal use) -->
+    <!-- Material Web (minimal demo import) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
@@ -19,7 +19,6 @@
     <style>
       :root{
         --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-        --panel-bg: rgba(12,26,74,.92);
         --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
         --card-bd: rgba(170,200,255,.22);
         --card-bd-hover:#9dd1ff66;
@@ -93,6 +92,7 @@
       .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
       .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
 
+      /* My Home Assistant pill buttons */
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
         display:inline-flex; align-items:center; gap:8px;
@@ -104,6 +104,7 @@
       }
       .myha-btn:active{ transform: translateY(1px); }
       .myha-btn.secondary{ --grad-a:#1b2a6b; --grad-b:#2c57b8; color:#eaf4ff; }
+      .myha-btn.neutral{ --grad-a:#6d7a92; --grad-b:#4e5a74; color:#f6f8ff; } /* gray for "View description" */
 
       .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
       .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
@@ -111,7 +112,6 @@
       .more img{ max-width:100%; height:auto; border-radius:8px; }
       .more a{ color:#aee1ff; }
       .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
-      /* normalize any huge inline import banners into compact pills */
       .more a.myha-inline-import{ display:inline-flex; }
 
       #error, #empty{ text-align:center; color:#e7eefc; }
@@ -133,7 +133,7 @@
         <sl-select id="sort" value="new" hoist>
           <sl-option value="new">Newest</sl-option>
           <sl-option value="title">Title A–Z</sl-option>
-          <sl-option value="uses">Most used</sl-option>
+          <sl-option value="likes">Most liked</sl-option>
         </sl-select>
 
         <!-- Tags dropdown (populated by JS) -->
