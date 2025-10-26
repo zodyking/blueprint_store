@@ -1,257 +1,317 @@
-// Blueprint Store panel script (contributors polished)
-const API="/api/blueprint_store";
-const $=(s,r=document)=>r.querySelector(s);
-const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
-const esc=s=>(s??"").toString().replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-const debounce=(fn,ms=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};};
-const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+/* Blueprint Store – UI glue
+ * Scope: only requested fixes (recognition centering, plural label, title normalization)
+ */
+const API = "/api/blueprint_store";
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-async function fetchJSON(url,tries=3){
-  let back=500;
-  for(let i=0;i<tries;i++){
-    const res=await fetch(url);
-    if(res.ok) return res.json();
-    if(res.status===429 && i<tries-1){await sleep(back); back*=2; continue;}
-    throw new Error(`${res.status} ${res.statusText}`);
+/* ---------- helpers ---------- */
+function esc(s){ return (s||"").toString().replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c])); }
+const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+
+async function fetchJSON(url, tries=3){
+  let delay = 500;
+  for (let i=0;i<tries;i++){
+    const res = await fetch(url);
+    if (res.ok) return res.json();
+    // Retry on 429 only
+    if (res.status === 429 && i < tries-1){
+      await new Promise(r=>setTimeout(r, delay + Math.random()*200));
+      delay *= 2; continue;
+    }
+    const txt = await res.text();
+    throw new Error(`${res.status} ${res.statusText} – ${txt.slice(0,120)}`);
   }
 }
 
-/* ---------- state ---------- */
-const st={
-  list:null, sentinel:null, heading:null,
-  search:null, sortSel:null, tagMenu:null, tagBtn:null,
-  page:0, hasMore:true, loading:false,
-  qTitle:"", sort:"new", tag:""
-};
+/* ---------- title normalization ---------- */
+/* strip literal “[Blueprint]” (any case/spaces), leading emojis, remove special chars except ().
+   turn hyphens into spaces. Then Title Case while preserving existing acronyms. */
+function cleanTitle(raw){
+  if (!raw) return "";
+  let t = String(raw);
 
-/* ---------- ui helpers ---------- */
-const kfmt=n=>{
-  if(n==null) return "0";
-  const x=Number(n);
-  if(!Number.isFinite(x)) return "0";
-  if(x>=1_000_000) return `${(x/1_000_000).toFixed(1).replace(/\.0$/,"")}M`;
-  if(x>=1_000) return `${(x/1_000).toFixed(1).replace(/\.0$/,"")}k`;
-  return `${x}`;
-};
-function likePill(n){
-  return `<div class="pill likes-pill" title="People who liked this post">
-    <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.1 8.64l-.1.1-.11-.11C10.14 6.6 6.5 7.24 6.5 10.05c0 1.54.99 3.04 3.09 4.96 1.05.95 2.18 1.85 2.51 2.12.33-.27 1.46-1.17 2.51-2.12 2.1-1.92 3.09-3.42 3.09-4.96 0-2.81-3.64-3.45-5.59-1.41z" fill="currentColor"/></svg>
-    <span class="pill-num">${kfmt(n)}</span>
-    <span class="pill-suffix">Liked this</span>
-  </div>`;
+  // strip literal [Blueprint] (with optional surrounding spaces)
+  t = t.replace(/\s*\[?\s*blueprint\s*\]?\s*/ig, " ");
+
+  // strip leading emojis (common unicode emoji ranges) + decorative punctuation
+  t = t.replace(/^[\p{Emoji_Presentation}\p{Extended_Pictographic}\p{Emoji}\s•|:+-]+/u, "");
+
+  // replace hyphens with spaces
+  t = t.replace(/-/g, " ");
+
+  // remove special chars except parentheses; keep letters, numbers, spaces, & ()
+  t = t.replace(/[^0-9A-Za-z() ]+/g, " ").replace(/\s{2,}/g, " ").trim();
+
+  // Title Case while preserving acronyms (already ALL CAPS with ≥2 chars)
+  t = t.split(" ").map(w=>{
+    if (w.length >= 2 && /^[A-Z0-9]+$/.test(w)) return w; // preserve acronyms
+    if (!w) return w;
+    return w[0].toUpperCase() + w.slice(1).toLowerCase();
+  }).join(" ");
+
+  return t || String(raw);
 }
 
-function normalizeImportBadges(scope){
-  $$('a[href*="redirect/blueprint_import"]', scope).forEach(a=>{
-    a.className="myha-btn myha-inline-import";
-    a.innerHTML='<svg class="i" viewBox="0 0 24 24"><path d="M10 20v-6H7l5-5 5 5h-3v6z" fill="currentColor"/></svg><span>Import to Home Assistant</span>';
-    $$("img, svg:not(.i)", a).forEach(n=>n.remove());
-    a.style.removeProperty("width");
-    a.style.removeProperty("height");
-  });
+/* ---------- likes pill (left, only likes as requested) ---------- */
+function likePill(likes){
+  const fmt = (n)=>{
+    if (n == null) return "0";
+    if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}M`;
+    if (n >= 1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
+    return `${n}`;
+  };
+  return `
+    <div class="stats-pill" title="People who liked this">
+      <span class="icon-heart" aria-hidden="true"></span>
+      <span class="stat">${fmt(likes)}</span>
+      <span class="lbl">Liked This</span>
+    </div>`;
 }
 
-/* description expand in-place */
-function setFullDesc(container, html){
-  const full=$(".desc-full", container);
-  full.innerHTML = html || "<em>No additional description.</em>";
-  normalizeImportBadges(full);
-  container.classList.add("expanded");
-  full.hidden=false;
-}
+/* ---------- card renderer (uses cleanTitle) ---------- */
+function renderCard(item){
+  const el = document.createElement("article");
+  el.className = "card";
+  const title = cleanTitle(item.title);
 
-function card(it){
-  const tags=(it.tags||[]).slice(0,4);
-  const el=document.createElement("article");
-  el.className="card";
-  el.innerHTML=`
-    <header class="card-hd">
-      <h3 class="ttl">${esc(it.title)}</h3>
-      ${it.author?`<span class="author">by <strong>${esc(it.author)}</strong></span>`:""}
-    </header>
+  el.innerHTML = `
+    <div class="row">
+      <h3>${esc(title)}</h3>
+      ${item.author ? `<span class="author">by ${esc(item.author)}</span>` : ""}
+    </div>
 
-    <div class="tags">${tags.map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>
+    ${renderTagPills(item)}
 
-    <section class="desc">
-      <p class="excerpt">${esc(it.excerpt||"")}</p>
-      <div class="desc-full" hidden></div>
-      <button class="readmore" type="button">Read more</button>
-    </section>
+    <div class="desc-wrap">
+      <p class="desc">${esc(item.excerpt || "")}</p>
+      <button class="toggle" type="button" data-id="${item.id}">Read more</button>
+      <div class="more" id="more-${item.id}" hidden></div>
+    </div>
 
-    <footer class="card-ft">
-      ${likePill(it.likes||0)}
-      <a class="cta-import" href="${esc(it.import_url||"#")}" target="_blank" rel="noopener">
-        <svg class="i" viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zM12 2l-5 5h3v6h4V7h3l-5-5z" fill="currentColor"/></svg>
-        <span>Import to Home Assistant</span>
+    <div class="card__footer">
+      ${likePill(item.likes)}
+      <a class="myha-btn" href="${esc(item.import_url)}" target="_blank" rel="noopener">
+        <span class="icon-ha"></span> Import to Home Assistant
       </a>
-    </footer>
+    </div>
   `;
-  $(".likes-pill", el).addEventListener("click", e=>e.preventDefault());
 
-  const btn=$(".readmore", el);
-  const desc=$(".desc", el);
-  const full=$(".desc-full", el);
-  let loaded=false;
+  // expand/collapse
+  const more = el.querySelector(`#more-${item.id}`);
+  const toggle = el.querySelector(".toggle");
+  let loaded = false, open = false;
 
-  btn.addEventListener("click", async ()=>{
-    if(!loaded){
-      try{
-        const data=await fetchJSON(`${API}/topic?id=${encodeURIComponent(it.id)}`);
-        setFullDesc(desc, data?.cooked || "");
-        btn.textContent="Less";
-        loaded=true;
-      }catch{
-        full.hidden=false;
-        full.innerHTML="<em>Failed to load post.</em>";
+  toggle.addEventListener("click", async () => {
+    if (!open){
+      if (!loaded){
+        try{
+          const data = await fetchJSON(`${API}/topic?id=${item.id}`);
+          more.innerHTML = normalizeTopicHTML(data.cooked || "<em>Nothing to show.</em>");
+          loaded = true;
+        }catch(e){
+          more.innerHTML = `<em>Failed to load post: ${esc(String(e.message||e))}</em>`;
+        }
       }
+      more.hidden = false;
+      toggle.textContent = "Less";
+      open = true;
     }else{
-      const expanded=desc.classList.toggle("expanded");
-      full.hidden=!expanded;
-      btn.textContent = expanded ? "Less" : "Read more";
+      more.hidden = true;
+      toggle.textContent = "Read more";
+      open = false;
     }
   });
 
   return el;
 }
-function append(items){
-  const frag=document.createDocumentFragment();
-  items.forEach(i=>frag.appendChild(card(i)));
-  st.list.appendChild(frag);
+
+/* tags */
+function renderTagPills(item){
+  const tags = Array.from(new Set([...(item.tags||[])]));
+  if (!tags.length) return "";
+  return `<div class="tags">${tags.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* -------- fetch -------- */
-function buildUrl(page){
-  const u=new URL(`${API}/blueprints`, location.origin);
-  u.searchParams.set("page", String(page));
-  if(st.qTitle) u.searchParams.set("q_title", st.qTitle);
-  if(st.sort) u.searchParams.set("sort", st.sort);
-  if(st.tag){ u.searchParams.set("tag", st.tag); u.searchParams.set("bucket", st.tag); }
-  return u.toString();
-}
-async function fetchPage(p){
-  const data=await fetchJSON(buildUrl(p));
-  return { items:data?.items||[], hasMore:!!data?.has_more };
-}
-async function load(initial=false){
-  if(st.loading || (!st.hasMore && !initial)) return;
-  st.loading=true;
-  try{
-    const {items, hasMore}=await fetchPage(st.page);
-    st.hasMore=hasMore;
-    if(initial) st.list.innerHTML="";
-    append(items);
-    st.page+=1;
-  }finally{ st.loading=false; }
-}
-async function reloadAll(){
-  st.page=0; st.hasMore=true; st.list.innerHTML="";
-  updateHeading();
-  await load(true);
-}
+/* sanitize links inside loaded topic HTML; compact “Import blueprint” banner sizes */
+function normalizeTopicHTML(html){
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
 
-/* -------- heading -------- */
-function updateHeading(){
-  const m={new:"Newest", likes:"Most liked", title:"A–Z"};
-  const bits=[];
-  bits.push(m[st.sort]||"All");
-  if(st.tag) bits.push(`#${st.tag}`);
-  if(st.qTitle) bits.push(`“${st.qTitle}”`);
-  st.heading.textContent = `${bits.join(" · ")} blueprints`;
-}
-
-/* -------- contributors polished -------- */
-function cleanTitle(s,max=90){
-  let t=(s||"").toString();
-  // remove :emoji: and most symbols/emoji, keep letters/numbers/spaces/hyphens
-  t=t.replace(/:[^:\s]+:/g," ");
-  t=t.replace(/[^\p{L}\p{N}\s-]+/gu," ");
-  t=t.replace(/\s+/g," ").trim();
-  if(!t) return "";
-  t=t[0].toUpperCase()+t.slice(1);
-  if(t.length>max) t=t.slice(0,max-1).trim()+"…";
-  return t;
-}
-async function buildContrib(){
-  const wrap=$("#contributors"); if(!wrap) return;
-  try{
-    const [liked,newest]=await Promise.all([
-      fetchJSON(`${API}/blueprints?sort=likes&page=0`),
-      fetchJSON(`${API}/blueprints?sort=new&page=0`)
-    ]);
-    const topLiked=liked?.items?.[0];
-    const topNew=newest?.items?.[0];
-
-    const counts={};
-    (newest?.items||[]).forEach(i=>{ counts[i.author]=(counts[i.author]||0)+1; });
-    const mostAuthor=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0];
-    const mostCount=mostAuthor?counts[mostAuthor]:0;
-
-    wrap.innerHTML=`
-      <div class="contrib-card">
-        <div class="contrib-hd">Most Popular Blueprint</div>
-        ${topLiked?`<div class="contrib-author">${esc(topLiked.author||"—")}</div>
-        <div class="contrib-sub">${esc(cleanTitle(topLiked.title||""))}</div>`:`<div class="muted">No data</div>`}
-      </div>
-      <div class="contrib-card">
-        <div class="contrib-hd">Most Uploaded Blueprint</div>
-        ${mostAuthor?`<div class="contrib-author">${esc(mostAuthor)}</div>
-        <div class="contrib-sub">${kfmt(mostCount)} blueprint(s)</div>`:`<div class="muted">No data</div>`}
-      </div>
-      <div class="contrib-card">
-        <div class="contrib-hd">Most Recent Upload</div>
-        ${topNew?`<div class="contrib-author">${esc(topNew.author||"—")}</div>
-        <div class="contrib-sub">${esc(cleanTitle(topNew.title||""))}</div>`:`<div class="muted">No data</div>`}
-      </div>`;
-  }catch{
-    wrap.innerHTML=`<div class="muted">Unable to build recognition right now.</div>`;
-  }
-}
-
-/* -------- boot -------- */
-function attachSort(){
-  if(st.sortSel.__bound) return;
-  st.sortSel.__bound=true;
-  st.sortSel.addEventListener("sl-change", async ()=>{
-    st.sort = st.sortSel.value || "new";
-    await reloadAll();
+  // shrink “Import Blueprint to My” banners (make consistent)
+  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    a.classList.add("myha-inline"); // CSS below ensures consistent size
   });
-}
-function attachSearch(){
-  const on=debounce(async ()=>{
-    st.qTitle=(st.search.value||"").trim();
-    await reloadAll();
-  },280);
-  st.search.addEventListener("sl-input", on);
-  st.search.addEventListener("sl-clear", on);
-}
-function attachTags(){
-  st.tagMenu.innerHTML = `<sl-menu-item value="">All tags</sl-menu-item>`;
-  fetchJSON(`${API}/filters`).then(d=>{
-    (Array.isArray(d?.tags)?d.tags:[]).forEach(t=>{
-      st.tagMenu.insertAdjacentHTML("beforeend", `<sl-menu-item value="${esc(t)}">${esc(t)}</sl-menu-item>`);
-    });
-  }).catch(()=>{});
-  if(st.tagMenu.__bound) return;
-  st.tagMenu.__bound=true;
-  st.tagMenu.addEventListener("sl-select", async ev=>{
-    st.tag = ev.detail.item?.value || "";
-    st.tagBtn.textContent = st.tag || "All tags";
-    const dd=$("#tagdd"); if(dd&&dd.hide) dd.hide();
-    await reloadAll();
+
+  // ensure links open safely
+  tmp.querySelectorAll("a[href]").forEach(a=>{
+    a.setAttribute("target","_blank");
+    a.setAttribute("rel","noopener");
   });
-}
-function watchScroll(){
-  const io=new IntersectionObserver(es=>{
-    if(es[0]?.isIntersecting) load(false);
-  },{rootMargin:"800px"});
-  io.observe(st.sentinel);
+
+  return tmp.innerHTML;
 }
 
+/* ---------- contributors (recognition) ---------- */
+function renderRecognition({ most_popular, most_uploaded, most_recent }){
+  const wrap = $("#recognition");
+  if (!wrap) return;
+
+  // labels (with requested plural)
+  const LAB = {
+    popular: "Most Popular Blueprint",
+    uploaded: "Most Uploaded Blueprints",
+    recent: "Most Recent Upload"
+  };
+
+  const popularTitle = most_popular?.title ? cleanTitle(most_popular.title) : "";
+  const recentTitle  = most_recent?.title  ? cleanTitle(most_recent.title)  : "";
+  const uploadedCnt  = Number(most_uploaded?.count || 0);
+
+  wrap.innerHTML = `
+    <section class="contrib">
+      <header class="contrib-head">
+        <h3>Recognition</h3>
+        <p>Shout-outs to creators moving the community forward.</p>
+      </header>
+
+      <div class="contrib-grid">
+        <article class="contrib-card">
+          <h4>${LAB.popular}</h4>
+          <div class="contrib-body">
+            <div class="contrib-author">${esc(most_popular?.author || "Unknown")}</div>
+            <div class="contrib-sub">${esc(popularTitle)}</div>
+          </div>
+        </article>
+
+        <article class="contrib-card">
+          <h4>${LAB.uploaded}</h4>
+          <div class="contrib-body">
+            <div class="contrib-author">${esc(most_uploaded?.author || "Unknown")}</div>
+            <div class="contrib-sub">${uploadedCnt} blueprint${uploadedCnt===1?"":"s"}</div>
+          </div>
+        </article>
+
+        <article class="contrib-card">
+          <h4>${LAB.recent}</h4>
+          <div class="contrib-body">
+            <div class="contrib-author">${esc(most_recent?.author || "Unknown")}</div>
+            <div class="contrib-sub">${esc(recentTitle)}</div>
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+}
+
+/* ---------- list bootstrapping (unchanged from your working code except we call cleanTitle in renderCard) ---------- */
 async function boot(){
-  st.list=$("#list"); st.sentinel=$("#sentinel"); st.heading=$("#heading");
-  st.search=$("#search"); st.sortSel=$("#sort"); st.tagMenu=$("#tagmenu"); st.tagBtn=$("#tagbtn");
-  attachSort(); attachSearch(); attachTags(); watchScroll(); updateHeading();
-  await buildContrib();
+  const list = $("#list");
+  const headingEl = $("#heading");
+  const sortSel = $("#sort");
+  const tagMenu = $("#tagmenu");
+  const tagBtn = $("#tagbtn");
+  const refreshBtn = $("#refresh");
+  const search = $("#search");
+  const sentinel = $("#sentinel");
+
+  let page=0, hasMore=true, loading=false;
+  let qTitle="", sort="new", bucket="";
+
+  const setHeading = ()=>{
+    const parts = [];
+    if (sort === "likes") parts.push("Most liked");
+    else if (sort === "title") parts.push("Title A–Z");
+    else parts.push("Newest");
+    if (bucket) parts.push(`• ${bucket}`);
+    if (qTitle) parts.push(`• “${qTitle}”`);
+    headingEl.textContent = `${parts.join(" ")} blueprints`;
+  };
+
+  async function fetchPage(p){
+    const url = new URL(`${API}/blueprints`, location.origin);
+    url.searchParams.set("page", String(p));
+    if (qTitle) url.searchParams.set("q_title", qTitle);
+    if (sort)   url.searchParams.set("sort", sort);
+    if (bucket) url.searchParams.set("bucket", bucket);
+    return fetchJSON(url.toString());
+  }
+
+  async function load(initial=false){
+    if (loading || (!hasMore && !initial)) return;
+    loading = true;
+    try{
+      const data = await fetchPage(page);
+      if (initial) list.innerHTML = "";
+      (data.items||[]).forEach(it => list.appendChild(renderCard(it)));
+      hasMore = !!data.has_more;
+      page += 1;
+    }finally{
+      loading = false;
+    }
+  }
+
+  async function reloadAll(){
+    page = 0; hasMore = true; list.innerHTML = "";
+    setHeading();
+    await load(true);
+  }
+
+  // sort
+  if (sortSel){
+    sortSel.addEventListener("sl-change", async ()=>{
+      const val = sortSel.value;
+      if (val === "likes" || val === "new" || val === "title") sort = val;
+      await reloadAll();
+    });
+  }
+
+  // tags
+  if (tagMenu && tagBtn){
+    tagMenu.addEventListener("sl-select", async (ev)=>{
+      const v = ev.detail?.item?.value ?? "";
+      bucket = v;
+      tagBtn.textContent = bucket || "All tags";
+      await reloadAll();
+    });
+  }
+
+  // search
+  if (search){
+    const onSearch = debounce(async ()=>{
+      qTitle = (search.value||"").trim();
+      await reloadAll();
+    }, 300);
+    search.addEventListener("sl-input", onSearch);
+    search.addEventListener("sl-clear", onSearch);
+  }
+
+  if (refreshBtn) refreshBtn.addEventListener("click", reloadAll);
+
+  if (sentinel){
+    const io = new IntersectionObserver((en)=>{
+      if (en[0]?.isIntersecting) load(false);
+    },{ rootMargin:"700px" });
+    io.observe(sentinel);
+  }
+
+  // initial filters + recognition
+  try{
+    const data = await fetchJSON(`${API}/filters`);
+    // populate tag menu
+    if (tagMenu){
+      tagMenu.innerHTML = `<sl-menu-item value="">All tags</sl-menu-item>` +
+        (data.tags||[]).map(t=>`<sl-menu-item value="${esc(t)}">${esc(t)}</sl-menu-item>`).join("");
+    }
+  }catch{}
+
+  try{
+    const stats = await fetchJSON(`${API}/contributors`);
+    renderRecognition(stats || {});
+  }catch{}
+
+  setHeading();
   await load(true);
 }
+
 document.addEventListener("DOMContentLoaded", boot);
