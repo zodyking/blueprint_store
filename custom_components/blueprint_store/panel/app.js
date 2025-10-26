@@ -1,4 +1,3 @@
-// app.js
 const API = "/api/blueprint_store";
 const $ = (s) => document.querySelector(s);
 
@@ -39,7 +38,6 @@ function openExternal(url){
     if (w) {
       try { w.opener = null; } catch {}
       const safe = String(url).replace(/"/g, "&quot;");
-      // lightweight fallback content
       w.document.write(`<!doctype html><meta charset="utf-8">
         <title>Opening…</title>
         <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
@@ -70,15 +68,19 @@ function viewDescButton(){
       View description
     </button>`;
 }
-function forumButtonRedirect(tid, slug){
-  const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
-  const href = `${API}/go?${qs}`;
+
+/* NEW: stats pill (replaces old forum button) */
+function statsPill(likes, replies){
+  const l = Number(likes ?? 0);
+  const r = Number(replies ?? 0);
   return `
-    <a class="myha-btn secondary" data-open="${esc(href)}">
-      <sl-icon name="box-arrow-up-right"></sl-icon>
-      Forum post
-    </a>`;
+    <span class="myha-btn secondary" style="cursor:default" title="${l.toLocaleString()} likes • ${r.toLocaleString()} comments" aria-label="Post stats">
+      <sl-icon name="heart"></sl-icon>${l.toLocaleString()}
+      &nbsp;&nbsp;
+      <sl-icon name="chat-dots"></sl-icon>${r.toLocaleString()}
+    </span>`;
 }
+
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
 /* tags renderer */
@@ -97,7 +99,6 @@ function rewriteToRedirect(href){
   try{
     const u = new URL(href);
     if (u.hostname !== "community.home-assistant.io") return null;
-    // Discourse topic URLs are /t/<slug>/<id> or /t/<id>
     const parts = u.pathname.split("/").filter(Boolean);
     const idx = parts.indexOf("t");
     if (idx === -1) return null;
@@ -156,6 +157,10 @@ function renderCard(it){
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
 
+  // derive stats with fallbacks
+  const likes   = it.likes ?? it.like_count ?? 0;
+  const replies = it.replies ?? it.comments ?? ((it.posts_count || 1) - 1);
+
   el.innerHTML = `
     <div class="row">
       <h3>${esc(it.title)}</h3>
@@ -169,7 +174,7 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButtonRedirect(it.id, it.slug || "")}
+      ${statsPill(likes, replies)}
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -207,7 +212,7 @@ function renderCard(it){
     }
   });
 
-  // Intercept open buttons on the card footer
+  // Intercept open buttons on the card footer (import + any in-description pills)
   el.addEventListener("click", (ev)=>{
     const opener = ev.target.closest("[data-open]");
     if (!opener) return;
