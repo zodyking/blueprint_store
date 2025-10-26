@@ -1,58 +1,111 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Blueprint Store</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- Tailwind CDN + Flowbite (UI Library) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.css">
-    <script>tailwind.config = { theme: { extend: { colors: { brand: { 600:'#0d3b8e', 500:'#0a5bd8' } } } } };</script>
-    <style>
-      /* Blueprint-style background grid that matches your logo */
-      body::before{
-        content:"";
-        position:fixed; inset:0; pointer-events:none; z-index:-1;
-        background:
-          linear-gradient(180deg, rgba(10,91,216,.35), rgba(13,59,142,.65)),
-          linear-gradient(0deg, rgba(0,0,0,.25), rgba(0,0,0,.25));
-      }
-      body::after{
-        content:"";
-        position:fixed; inset:0; pointer-events:none; z-index:-2;
-        background-image:
-          linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
-        background-size: 28px 28px;
-      }
-    </style>
-  </head>
-  <body class="text-slate-100">
-    <!-- Sticky nav -->
-    <header class="sticky top-0 z-10 backdrop-blur border-b border-white/10 bg-brand-600/70">
-      <div class="max-w-5xl mx-auto px-3 py-2 flex items-center gap-3">
-        <span class="font-black tracking-wide">Blueprint Store</span>
-        <div class="flex-1">
-          <label class="relative block">
-            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-white/70">
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none"><path d="M21 21l-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </span>
-            <input id="search" type="search" placeholder="Search blueprints by title (loads every match)…"
-              class="w-full rounded-full bg-white/10 border border-white/20 pl-10 pr-3 py-2 text-sm placeholder-white/60 outline-none focus:ring-2 focus:ring-sky-300" />
-          </label>
-        </div>
-        <button id="refresh" class="rounded-lg bg-sky-300 text-sky-900 px-3 py-2 text-sm font-semibold shadow">Refresh</button>
-      </div>
-    </header>
+const API = "/api/blueprint_store";
+const $ = (s) => document.querySelector(s);
 
-    <main class="max-w-5xl mx-auto px-3 py-4">
-      <div id="list" class="space-y-4"></div>
-      <p id="empty" class="hidden text-center text-white/70 py-6">No blueprints matched.</p>
-      <p id="error" class="hidden text-center text-rose-200 py-3"></p>
-      <div id="sentinel" class="h-12"></div>
-    </main>
+const list   = $("#list");
+const empty  = $("#empty");
+const errorB = $("#error");
+const search = $("#search");
+const refreshBtn = $("#refresh");
+const sentinel = $("#sentinel");
 
-    <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.js"></script>
-    <script src="./app.js"></script>
-  </body>
-</html>
+let page = 0;
+let qTitle = "";
+let loading = false;
+let hasMore = true;
+
+function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
+const debounce = (fn,ms=250)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+
+function openExternal(url){
+  try { window.top?.open(url, "_blank", "noopener"); }
+  catch { window.open(url, "_blank"); }
+}
+
+function usageBadge(uses){
+  if (uses == null) return "";
+  const n = uses.toLocaleString();
+  return `<span class="ml-2 inline-flex items-center rounded-full bg-white/15 text-white/90 px-2 py-0.5 text-xs font-semibold">
+    <svg class="mr-1 h-3.5 w-3.5" viewBox="0 0 24 24" fill="none"><path d="M20 7H4m16 5H4m16 5H4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+    ${n} uses</span>`;
+}
+
+function renderCard(it){
+  const el = document.createElement("article");
+  el.className = "rounded-2xl border border-white/15 bg-white/10 shadow-xl backdrop-blur p-4";
+  el.innerHTML = `
+    <div class="flex flex-wrap gap-2 items-baseline">
+      <h3 class="text-lg md:text-xl font-extrabold leading-snug">${esc(it.title)}</h3>
+      ${it.author ? `<span class="text-white/70 font-semibold">by ${esc(it.author)}</span>` : ""}
+      ${usageBadge(it.uses)}
+    </div>
+    <p class="mt-2 text-white/80 leading-relaxed">${esc(it.excerpt || "")}</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      <a class="inline-flex items-center rounded-lg bg-sky-300 text-sky-900 px-3 py-2 text-sm font-bold shadow hover:translate-y-[1px] transition"
+         href="${it.import_url}" target="_blank" rel="noopener">Import to Home Assistant</a>
+      <a class="inline-flex items-center rounded-lg border border-white/20 text-white/90 px-3 py-2 text-sm font-semibold hover:bg-white/10 forum"
+         href="${it.topic_url}">Forum post</a>
+    </div>
+  `;
+  el.querySelector(".forum").addEventListener("click", (e) => { e.preventDefault(); openExternal(it.topic_url); });
+  return el;
+}
+
+function appendItems(items){ for (const it of items) list.appendChild(renderCard(it)); }
+function setError(msg){ errorB.textContent = msg; errorB.classList.remove("hidden"); }
+function clearError(){ errorB.classList.add("hidden"); errorB.textContent = ""; }
+
+async function fetchPage(p, queryTitle){
+  const url = new URL(`${API}/blueprints`, location.origin);
+  url.searchParams.set("page", String(p));
+  if (queryTitle) url.searchParams.set("q_title", queryTitle);
+  const res = await fetch(url.toString());
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
+async function load(initial=false){
+  if (loading || (!hasMore && !initial)) return;
+  loading = true; clearError();
+  try{
+    const data = await fetchPage(page, qTitle);
+    const items = Array.isArray(data) ? data : (data.items || []);
+    hasMore = !!data.has_more;
+    if (initial) {
+      list.innerHTML = "";
+      empty.classList.toggle("hidden", items.length > 0);
+    }
+    appendItems(items);
+    page += 1;
+  }catch(e){ setError(`Failed to load: ${String(e.message || e)}`); }
+  finally{ loading = false; }
+}
+
+// When searching: reset and prefetch multiple pages so user sees "everything"
+const onSearch = debounce(async () => {
+  qTitle = (search.value || "").trim();
+  page = 0; hasMore = true; list.innerHTML = ""; empty.classList.add("hidden");
+  // prefetch until we have at least ~30 items or no more pages
+  let collected = 0;
+  while (hasMore && collected < 30) {
+    await load(collected === 0);
+    collected = list.childElementCount;
+    if (!qTitle && collected >= 15) break; // default view doesn't need to preload too much
+  }
+  if (collected === 0) empty.classList.remove("hidden");
+}, 250);
+
+search.addEventListener("input", onSearch);
+
+refreshBtn.addEventListener("click", async () => {
+  page = 0; hasMore = true;
+  await load(true);
+});
+
+const io = new IntersectionObserver((entries)=>{
+  if (entries[0] && entries[0].isIntersecting) load(false);
+},{ rootMargin:"600px" });
+io.observe(sentinel);
+
+load(true);
