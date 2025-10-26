@@ -10,7 +10,7 @@
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (only filter chips; loads as ESM via CDN) -->
+    <!-- Material Web (filter chips) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
@@ -28,7 +28,6 @@
         background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
         min-height:100vh;
       }
-      /* Blueprint grid overlay */
       body::after{
         content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
         background-image:
@@ -36,32 +35,22 @@
           linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
         background-size: 28px 28px;
       }
-
       header{ position:sticky; top:0; z-index:3; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
       .bar{ max-width:var(--maxw); margin:0 auto; padding:8px 12px; display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center; }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
-
       main{ max-width:var(--maxw); margin:12px auto 40px; padding:0 12px; }
-
       .banner{ margin:8px 0 14px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
-
       .toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 8px 0 6px; }
       .chips{ display:flex; gap:6px; flex-wrap:wrap; }
-
       .section-title{ margin:20px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
-
-      .card{
-        background: var(--card-bg); border:1px solid var(--card-bd); border-radius:16px;
-        box-shadow: var(--shadow); padding:14px; margin:12px 0;
-      }
+      .card{ background: var(--card-bg); border:1px solid var(--card-bd); border-radius:16px; box-shadow: var(--shadow); padding:14px; margin:12px 0; }
       .card h3{ margin:0 0 4px; font-size:18px; font-weight:900; }
       .row{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
       .desc{ color:var(--muted); margin:8px 0 12px; line-height:1.55; }
       .actions{ display:flex; gap:8px; flex-wrap:wrap; }
       .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
-
       #sentinel{ height:60px; }
       #error, #empty{ text-align:center; color:#e7eefc; }
     </style>
@@ -70,7 +59,7 @@
     <header>
       <div class="bar">
         <div class="brand">
-          <img src="./assets/logo.png" alt="Blueprint Store"/>
+          <img src="/blueprint_store_static/images/bps_logo.png" alt="Blueprint Store"/>
           <span>Blueprint Store</span>
         </div>
 
@@ -83,7 +72,7 @@
     </header>
 
     <main>
-      <div class="banner"><img src="./assets/banner.png" alt="Blueprint Store banner"></div>
+      <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
       <div class="toolbar">
         <sl-select id="sort" value="new" label="Sort" hoist>
@@ -110,6 +99,7 @@
       <div id="sentinel"></div>
     </main>
 
-    <script src="./app.js"></script>
+    <!-- IMPORTANT: module so we can use top-level await in app.js -->
+    <script type="module" src="./app.js"></script>
   </body>
 </html>
