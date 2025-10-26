@@ -7,7 +7,7 @@ from urllib.parse import urljoin
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, StaticPathConfig
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -148,11 +148,19 @@ async def _register_panel_and_routes(hass: HomeAssistant):
     store = hass.data.setdefault(DOMAIN, {})
     if store.get("registered"):
         return
+
+    # Views
     hass.http.register_view(BlueprintListView(hass))
     hass.http.register_view(BlueprintTopicView(hass))
     hass.http.register_view(BlueprintRefreshView(hass))
+
+    # NEW: static assets (HA 2025+ API)
     panel_dir = os.path.join(os.path.dirname(__file__), "panel")
-    hass.http.register_static_path(STATIC_BASE, panel_dir, cache_duration=86400)
+    hass.http.async_register_static_paths([
+        StaticPathConfig(url_path=STATIC_BASE, path=panel_dir, cache_headers=True)
+    ])
+
+    # Sidebar (iframe) pointing at the static index.html
     await hass.components.frontend.async_register_built_in_panel(
         component_name="iframe",
         sidebar_title=SIDEBAR_TITLE,
