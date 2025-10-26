@@ -1,7 +1,7 @@
-// Blueprint Store panel script (safe load)
+// Blueprint Store panel script (contributors polished)
 const API="/api/blueprint_store";
-const $=(s, r=document)=>r.querySelector(s);
-const $$=(s, r=document)=>Array.from(r.querySelectorAll(s));
+const $=(s,r=document)=>r.querySelector(s);
+const $$=(s,r=document)=>Array.from(r.querySelectorAll(s));
 const esc=s=>(s??"").toString().replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
 const debounce=(fn,ms=250)=>{let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};};
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -33,7 +33,6 @@ const kfmt=n=>{
   if(x>=1_000) return `${(x/1_000).toFixed(1).replace(/\.0$/,"")}k`;
   return `${x}`;
 };
-
 function likePill(n){
   return `<div class="pill likes-pill" title="People who liked this post">
     <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.1 8.64l-.1.1-.11-.11C10.14 6.6 6.5 7.24 6.5 10.05c0 1.54.99 3.04 3.09 4.96 1.05.95 2.18 1.85 2.51 2.12.33-.27 1.46-1.17 2.51-2.12 2.1-1.92 3.09-3.42 3.09-4.96 0-2.81-3.64-3.45-5.59-1.41z" fill="currentColor"/></svg>
@@ -87,11 +86,8 @@ function card(it){
       </a>
     </footer>
   `;
-
-  // likes pill is non-interactive
   $(".likes-pill", el).addEventListener("click", e=>e.preventDefault());
 
-  // read more loader
   const btn=$(".readmore", el);
   const desc=$(".desc", el);
   const full=$(".desc-full", el);
@@ -117,7 +113,6 @@ function card(it){
 
   return el;
 }
-
 function append(items){
   const frag=document.createDocumentFragment();
   items.forEach(i=>frag.appendChild(card(i)));
@@ -133,12 +128,10 @@ function buildUrl(page){
   if(st.tag){ u.searchParams.set("tag", st.tag); u.searchParams.set("bucket", st.tag); }
   return u.toString();
 }
-
 async function fetchPage(p){
   const data=await fetchJSON(buildUrl(p));
   return { items:data?.items||[], hasMore:!!data?.has_more };
 }
-
 async function load(initial=false){
   if(st.loading || (!st.hasMore && !initial)) return;
   st.loading=true;
@@ -150,7 +143,6 @@ async function load(initial=false){
     st.page+=1;
   }finally{ st.loading=false; }
 }
-
 async function reloadAll(){
   st.page=0; st.hasMore=true; st.list.innerHTML="";
   updateHeading();
@@ -167,12 +159,25 @@ function updateHeading(){
   st.heading.textContent = `${bits.join(" · ")} blueprints`;
 }
 
-/* -------- contributors (best-effort) -------- */
+/* -------- contributors polished -------- */
+function cleanTitle(s,max=90){
+  let t=(s||"").toString();
+  // remove :emoji: and most symbols/emoji, keep letters/numbers/spaces/hyphens
+  t=t.replace(/:[^:\s]+:/g," ");
+  t=t.replace(/[^\p{L}\p{N}\s-]+/gu," ");
+  t=t.replace(/\s+/g," ").trim();
+  if(!t) return "";
+  t=t[0].toUpperCase()+t.slice(1);
+  if(t.length>max) t=t.slice(0,max-1).trim()+"…";
+  return t;
+}
 async function buildContrib(){
-  const host=$("#contributors"); if(!host) return;
+  const wrap=$("#contributors"); if(!wrap) return;
   try{
-    const liked=await fetchJSON(`${API}/blueprints?sort=likes&page=0`);
-    const newest=await fetchJSON(`${API}/blueprints?sort=new&page=0`);
+    const [liked,newest]=await Promise.all([
+      fetchJSON(`${API}/blueprints?sort=likes&page=0`),
+      fetchJSON(`${API}/blueprints?sort=new&page=0`)
+    ]);
     const topLiked=liked?.items?.[0];
     const topNew=newest?.items?.[0];
 
@@ -181,23 +186,25 @@ async function buildContrib(){
     const mostAuthor=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])[0];
     const mostCount=mostAuthor?counts[mostAuthor]:0;
 
-    host.innerHTML=`
+    wrap.innerHTML=`
       <div class="contrib-card">
-        <div class="contrib-hd">Most popular</div>
+        <div class="contrib-hd">Most Popular Blueprint</div>
         ${topLiked?`<div class="contrib-author">${esc(topLiked.author||"—")}</div>
-        <div class="contrib-sub">${esc(topLiked.title||"")}</div>`:`<div class="muted">No data</div>`}
+        <div class="contrib-sub">${esc(cleanTitle(topLiked.title||""))}</div>`:`<div class="muted">No data</div>`}
       </div>
       <div class="contrib-card">
-        <div class="contrib-hd">Most blueprints</div>
+        <div class="contrib-hd">Most Uploaded Blueprint</div>
         ${mostAuthor?`<div class="contrib-author">${esc(mostAuthor)}</div>
-        <div class="contrib-sub">${mostCount} blueprint(s)</div>`:`<div class="muted">No data</div>`}
+        <div class="contrib-sub">${kfmt(mostCount)} blueprint(s)</div>`:`<div class="muted">No data</div>`}
       </div>
       <div class="contrib-card">
-        <div class="contrib-hd">Most recent</div>
+        <div class="contrib-hd">Most Recent Upload</div>
         ${topNew?`<div class="contrib-author">${esc(topNew.author||"—")}</div>
-        <div class="contrib-sub">${esc(topNew.title||"")}</div>`:`<div class="muted">No data</div>`}
+        <div class="contrib-sub">${esc(cleanTitle(topNew.title||""))}</div>`:`<div class="muted">No data</div>`}
       </div>`;
-  }catch{ host.innerHTML=`<div class="muted">Unable to build contributors right now.</div>`; }
+  }catch{
+    wrap.innerHTML=`<div class="muted">Unable to build recognition right now.</div>`;
+  }
 }
 
 /* -------- boot -------- */
