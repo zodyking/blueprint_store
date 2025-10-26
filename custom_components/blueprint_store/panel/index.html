@@ -1,58 +1,115 @@
 <!doctype html>
 <html>
   <head>
-    <meta charset="utf-8" />
+    <meta charset="utf-8"/>
     <title>Blueprint Store</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <!-- Tailwind CDN + Flowbite (UI Library) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.css">
-    <script>tailwind.config = { theme: { extend: { colors: { brand: { 600:'#0d3b8e', 500:'#0a5bd8' } } } } };</script>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
+    <!-- Shoelace (Web Components) -->
+    <script type="module"
+      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
+    </script>
+
+    <!-- Material Web (only filter chips; loads as ESM via CDN) -->
+    <script type="module">
+      import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
+    </script>
+
     <style>
-      /* Blueprint-style background grid that matches your logo */
-      body::before{
-        content:"";
-        position:fixed; inset:0; pointer-events:none; z-index:-1;
-        background:
-          linear-gradient(180deg, rgba(10,91,216,.35), rgba(13,59,142,.65)),
-          linear-gradient(0deg, rgba(0,0,0,.25), rgba(0,0,0,.25));
+      :root{
+        --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
+        --card-bg: rgba(255,255,255,0.08);
+        --card-bd: rgba(255,255,255,0.18);
+        --shadow: 0 10px 30px rgba(0,0,0,.35);
+        --maxw: 1100px;
       }
+      body{
+        margin:0; color:var(--ink); font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu;
+        background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
+        min-height:100vh;
+      }
+      /* Blueprint grid overlay */
       body::after{
-        content:"";
-        position:fixed; inset:0; pointer-events:none; z-index:-2;
+        content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
         background-image:
           linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
           linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
         background-size: 28px 28px;
       }
+
+      header{ position:sticky; top:0; z-index:3; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
+      .bar{ max-width:var(--maxw); margin:0 auto; padding:8px 12px; display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center; }
+      .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
+      .brand img{ width:28px; height:28px; border-radius:6px; }
+
+      main{ max-width:var(--maxw); margin:12px auto 40px; padding:0 12px; }
+
+      .banner{ margin:8px 0 14px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
+      .banner img{ width:100%; display:block; }
+
+      .toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 8px 0 6px; }
+      .chips{ display:flex; gap:6px; flex-wrap:wrap; }
+
+      .section-title{ margin:20px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+
+      .card{
+        background: var(--card-bg); border:1px solid var(--card-bd); border-radius:16px;
+        box-shadow: var(--shadow); padding:14px; margin:12px 0;
+      }
+      .card h3{ margin:0 0 4px; font-size:18px; font-weight:900; }
+      .row{ display:flex; gap:8px; align-items:baseline; flex-wrap:wrap; }
+      .desc{ color:var(--muted); margin:8px 0 12px; line-height:1.55; }
+      .actions{ display:flex; gap:8px; flex-wrap:wrap; }
+      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
+
+      #sentinel{ height:60px; }
+      #error, #empty{ text-align:center; color:#e7eefc; }
     </style>
   </head>
-  <body class="text-slate-100">
-    <!-- Sticky nav -->
-    <header class="sticky top-0 z-10 backdrop-blur border-b border-white/10 bg-brand-600/70">
-      <div class="max-w-5xl mx-auto px-3 py-2 flex items-center gap-3">
-        <span class="font-black tracking-wide">Blueprint Store</span>
-        <div class="flex-1">
-          <label class="relative block">
-            <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-white/70">
-              <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none"><path d="M21 21l-4.2-4.2M10.8 18a7.2 7.2 0 1 1 0-14.4 7.2 7.2 0 0 1 0 14.4Z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            </span>
-            <input id="search" type="search" placeholder="Search blueprints by title (loads every match)…"
-              class="w-full rounded-full bg-white/10 border border-white/20 pl-10 pr-3 py-2 text-sm placeholder-white/60 outline-none focus:ring-2 focus:ring-sky-300" />
-          </label>
+  <body>
+    <header>
+      <div class="bar">
+        <div class="brand">
+          <img src="./assets/logo.png" alt="Blueprint Store"/>
+          <span>Blueprint Store</span>
         </div>
-        <button id="refresh" class="rounded-lg bg-sky-300 text-sky-900 px-3 py-2 text-sm font-semibold shadow">Refresh</button>
+
+        <sl-input id="search" placeholder="Search titles (finds every match)…" clearable pill>
+          <sl-icon name="search" slot="prefix"></sl-icon>
+        </sl-input>
+
+        <sl-button id="refresh" variant="primary" pill>Refresh</sl-button>
       </div>
     </header>
 
-    <main class="max-w-5xl mx-auto px-3 py-4">
-      <div id="list" class="space-y-4"></div>
-      <p id="empty" class="hidden text-center text-white/70 py-6">No blueprints matched.</p>
-      <p id="error" class="hidden text-center text-rose-200 py-3"></p>
-      <div id="sentinel" class="h-12"></div>
+    <main>
+      <div class="banner"><img src="./assets/banner.png" alt="Blueprint Store banner"></div>
+
+      <div class="toolbar">
+        <sl-select id="sort" value="new" label="Sort" hoist>
+          <sl-option value="new">Newest</sl-option>
+          <sl-option value="title">Title A–Z</sl-option>
+          <sl-option value="uses">Most used</sl-option>
+        </sl-select>
+
+        <sl-select id="tags" multiple clearable placeholder="Filter by tag…" hoist></sl-select>
+
+        <div class="chips" id="chips"></div>
+      </div>
+
+      <div id="top10-wrap">
+        <div class="section-title">Top 10</div>
+        <div id="top10"></div>
+      </div>
+
+      <div class="section-title">All blueprints</div>
+      <div id="list"></div>
+
+      <p id="empty" style="display:none">No blueprints matched.</p>
+      <p id="error" style="display:none"></p>
+      <div id="sentinel"></div>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/flowbite@2.5.1/dist/flowbite.min.js"></script>
     <script src="./app.js"></script>
   </body>
 </html>
