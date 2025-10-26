@@ -9,17 +9,42 @@ function esc(s){
 }
 const debounce = (fn,ms=280)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
 
+async function fetchJSONRaw(url){
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
+// retry/backoff for 429
+async function fetchJSON(url, tries=3){
+  let delay = 600;
+  for(let i=0;i<tries;i++){
+    try{ return await fetchJSONRaw(url); }
+    catch(e){
+      const msg = String(e.message||e);
+      if (i < tries-1 && /429/.test(msg)) {
+        await new Promise(r=>setTimeout(r, delay + Math.random()*250));
+        delay *= 2;
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 /* pill buttons */
 function importButton(href){
   return `
-    <a class="myha-btn" href="${href}" target="_blank" rel="noopener">
+    <a class="myha-btn" href="${href}" target="_blank" rel="noopener noreferrer">
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
 }
 function forumButton(href){
   return `
-    <a class="myha-btn secondary" href="${href}" target="_blank" rel="noopener">
+    <a class="myha-btn secondary" href="${href}" target="_blank" rel="noopener noreferrer">
       <sl-icon name="box-arrow-up-right"></sl-icon>
       Forum post
     </a>`;
@@ -37,19 +62,13 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* full post renderer */
 function setPostHTML(container, html){
   container.innerHTML = html || "<em>Nothing to show.</em>";
   container.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
 }
 
-async function fetchJSON(url){
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-  const data = await res.json();
-  if (data && data.error) throw new Error(data.error);
-  return data;
-}
+/* ---------- client-side cache for topic details ---------- */
+const detailCache = new Map();
 
 /* ---------- card ---------- */
 function renderCard(it){
@@ -78,16 +97,21 @@ function renderCard(it){
   // Read more / less
   const toggle = el.querySelector(".toggle");
   const more = el.querySelector(`#more-${it.id}`);
-  let expanded = false, loaded = false;
+  let expanded = false;
   toggle.addEventListener("click", async () => {
     expanded = !expanded;
-    if (expanded && !loaded) {
+    if (expanded) {
+      toggle.style.pointerEvents = "none";
       try{
-        const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-        setPostHTML(more, data.cooked || "");
-        loaded = true;
+        if (!detailCache.has(it.id)) {
+          const data = await fetchJSON(`${API}/topic?id=${it.id}`);
+          detailCache.set(it.id, data.cooked || "");
+        }
+        setPostHTML(more, detailCache.get(it.id));
       }catch(e){
         setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
+      }finally{
+        toggle.style.pointerEvents = "";
       }
     }
     more.style.display = expanded ? "block" : "none";
