@@ -189,32 +189,15 @@ async def _topic_detail(session, topic_id: int):
         "cooked": cooked,
     }
 
-async def _fetch_category_topics(session, page: int):
-    endpoints = [
-        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
-        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
-        f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}",
-    ]
-    last_error = None
-    for url in endpoints:
-        try:
-            data = await _fetch_json(session, url)
-            topic_list = data.get("topic_list", data) or {}
-            topics = topic_list.get("topics", []) or []
-            more = bool(topic_list.get("more_topics_url") or topic_list.get("more_topics"))
-            return {"topics": topics, "more": more}
-        except Exception as e:
-            last_error = e
-            _LOGGER.debug("Blueprint Store: list endpoint failed %s -> %s", url, e)
-            continue
-    raise last_error if last_error else RuntimeError("No category endpoint succeeded")
-
+# ---- RESTORED: original, reliable category endpoint used when it worked ----
 async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket_filter: str | None):
     session = async_get_clientsession(hass)
-    data = await _fetch_category_topics(session, page)
-    topics = data["topics"]
+    url = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
+    data = await _fetch_json(session, url)
+    topic_list = (data.get("topic_list") or data) or {}
+    topics = topic_list.get("topics", []) or []
 
-    sem = asyncio.Semaphore(8)
+    sem = asyncio.Semaphore(10)
     out = []
 
     async def process(t):
@@ -251,7 +234,9 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
     await asyncio.gather(*(process(t) for t in topics if isinstance(t, dict)))
 
     out.sort(key=lambda x: x["id"], reverse=True)
-    return out, bool(data.get("more"))
+    # pagination hint (len>0 is enough; HA side does the scrolling)
+    has_more = bool(topic_list.get("more_topics_url") or len(topics) > 0)
+    return out, has_more
 
 class BlueprintsPagedView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
@@ -281,7 +266,7 @@ class BlueprintsPagedView(HomeAssistantView):
                 items.sort(key=lambda x: x["title"].lower())
             elif sort == "uses":
                 items.sort(key=lambda x: (x["uses"] or 0), reverse=True)
-            has_more = more_hint or ((page + 1) < max_pages and len(items) >= 0)
+            has_more = more_hint and ((page + 1) < max_pages)
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
             _LOGGER.exception("Blueprint Store: paged list failed")
@@ -351,13 +336,14 @@ class BlueprintImagesStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
-# ---------- NEW: safe, idempotent registration with a lock ----------
+# ---------- Registration: simple, idempotent, no “remove” ----------
 async def _register_views_and_panel(hass: HomeAssistant):
-    """Register API views, static routes and sidebar panel exactly once."""
     store = hass.data.setdefault(DOMAIN, {})
     lock: asyncio.Lock = store.setdefault("reg_lock", asyncio.Lock())
     async with lock:
-        # Views (idempotent in HA http router)
+        if store.get("registered"):
+            return
+        # Views
         try:
             hass.http.register_view(BlueprintsPagedView(hass))
             hass.http.register_view(BlueprintFiltersView(hass))
@@ -374,17 +360,7 @@ async def _register_views_and_panel(hass: HomeAssistant):
         except Exception as e:
             _LOGGER.exception("Blueprint Store: failed to register static views: %s", e)
 
-        # Sidebar panel — remove existing if present to avoid Overwriting error
-        try:
-            remover = getattr(ha_frontend, "async_remove_panel", None)
-            if remover:
-                maybe = remover(hass, DOMAIN)
-                if inspect.isawaitable(maybe):
-                    await maybe
-        except Exception:
-            # best-effort: ignore if it didn't exist
-            pass
-
+        # Panel (ignore “Overwriting panel …”)
         try:
             reg = getattr(ha_frontend, "async_register_built_in_panel", None)
             if reg:
@@ -399,21 +375,17 @@ async def _register_views_and_panel(hass: HomeAssistant):
                 )
                 if inspect.isawaitable(result):
                     await result
-            store["registered"] = True
         except ValueError as e:
-            # If another racing caller registered first, treat as success
             if "Overwriting panel" in str(e):
                 _LOGGER.debug("Blueprint Store: panel already exists; continuing")
-                store["registered"] = True
             else:
-                _LOGGER.exception("Blueprint Store: failed to register sidebar panel: %s", e)
+                _LOGGER.exception("Blueprint Store: panel register failed: %s", e)
         except Exception as e:
-            _LOGGER.exception("Blueprint Store: failed to register sidebar panel: %s", e)
+            _LOGGER.exception("Blueprint Store: panel register failed: %s", e)
+
+        store["registered"] = True
 
 async def _register(hass: HomeAssistant):
-    store = hass.data.setdefault(DOMAIN, {})
-    if store.get("registered"):
-        return
     await _register_views_and_panel(hass)
 
 async def async_setup(hass: HomeAssistant, _config) -> bool:
