@@ -3,6 +3,7 @@ import html
 import os
 import re
 import inspect
+import logging
 from time import time
 from urllib.parse import urljoin
 
@@ -11,7 +12,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.components import frontend as ha_frontend  # version-proof import
+from homeassistant.components import frontend as ha_frontend  # version-proof
 
 from .const import (
     DOMAIN,
@@ -27,6 +28,8 @@ from .const import (
     SIDEBAR_ICON,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 # ---------- tiny helpers ----------
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE  = re.compile(r"\s+")
@@ -37,7 +40,11 @@ def _text_excerpt(cooked_html: str, max_len: int = 240) -> str:
     return (txt[: max_len - 1] + "…") if len(txt) > max_len else txt
 
 async def _fetch_json(session, url):
-    async with session.get(url, headers={"Accept": "application/json"}) as resp:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "HomeAssistant-BlueprintBrowser/0.2 (+https://home-assistant.io)",
+    }
+    async with session.get(url, headers=headers) as resp:
         resp.raise_for_status()
         return await resp.json()
 
@@ -78,7 +85,11 @@ async def _crawl_blueprints(hass: HomeAssistant):
             tid = t["id"]
             title = t.get("title") or t.get("fancy_title") or f"Topic {tid}"
             topic_web_url = f"{COMMUNITY_BASE}/t/{tid}"
-            import_url, excerpt = await _fetch_topic_import_link(session, tid)
+            try:
+                import_url, excerpt = await _fetch_topic_import_link(session, tid)
+            except Exception as e:
+                _LOGGER.debug("Topic %s fetch failed: %s", tid, e)
+                return
             if import_url:
                 found.append({
                     "id": tid,
@@ -88,15 +99,29 @@ async def _crawl_blueprints(hass: HomeAssistant):
                     "excerpt": excerpt or "",
                 })
 
-    tasks = []
     for page in range(max_pages):
-        data = await _fetch_json(session, f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}")
+        # Primary category URL
+        primary = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
+        # Fallback: some Discourse setups also answer /c/<id>.json
+        fallback = f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}"
+        data = None
+        try:
+            data = await _fetch_json(session, primary)
+        except Exception as e1:
+            _LOGGER.debug("Category fetch failed (%s): %s; trying fallback", primary, e1)
+            try:
+                data = await _fetch_json(session, fallback)
+            except Exception as e2:
+                _LOGGER.warning("Both category URLs failed (page %s): %s", page, e2)
+                continue
+
         topics = (data.get("topic_list", {}) or data).get("topics", [])
+        tasks = []
         for t in topics:
             if isinstance(t, dict) and "id" in t:
                 tasks.append(asyncio.create_task(process_topic(t)))
-    if tasks:
-        await asyncio.gather(*tasks)
+        if tasks:
+            await asyncio.gather(*tasks)
 
     found.sort(key=lambda x: x["id"], reverse=True)
     return found
@@ -109,29 +134,38 @@ async def _refresh(hass: HomeAssistant, force: bool = False):
 
     if not force and (now - store.get("last_update", 0)) < cache_seconds and store.get("items"):
         return
-    store["items"] = await _crawl_blueprints(hass)
-    store["last_update"] = now
+    try:
+        store["items"] = await _crawl_blueprints(hass)
+        store["last_update"] = now
+    except Exception:
+        _LOGGER.exception("Blueprint Browser: refresh failed")
+        # keep old cache if any
 
-# ---------- HTTP views (now public: requires_auth = False) ----------
+# ---------- HTTP views (public) ----------
 class BlueprintListView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
     name = f"{DOMAIN}:blueprints"
-    requires_auth = False  # public
+    requires_auth = False
     cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
     async def get(self, request):
-        await _refresh(self.hass, force=False)
-        items = self.hass.data.get(DOMAIN, {}).get("items", [])
-        q = (request.query.get("q", "") or "").strip().lower()
-        if q:
-            items = [i for i in items if q in i["title"].lower() or q in (i["excerpt"] or "").lower()]
-        return self.json(items)
+        try:
+            await _refresh(self.hass, force=False)
+            items = self.hass.data.get(DOMAIN, {}).get("items", [])
+            q = (request.query.get("q", "") or "").strip().lower()
+            if q:
+                items = [i for i in items if q in i["title"].lower() or q in (i["excerpt"] or "").lower()]
+            return self.json({"items": items})
+        except Exception as e:
+            _LOGGER.exception("Blueprint Browser list view failed")
+            # Return 200 with error payload so the UI can show the reason
+            return self.json({"items": [], "error": f"{type(e).__name__}: {e}"})
 
 class BlueprintTopicView(HomeAssistantView):
     url = f"{API_BASE}/topic/{{topic_id}}"
     name = f"{DOMAIN}:topic"
-    requires_auth = False  # public
+    requires_auth = False
     cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
@@ -143,22 +177,25 @@ class BlueprintTopicView(HomeAssistantView):
         return self.json_message("Not found", status_code=404)
 
 class BlueprintRefreshView(HomeAssistantView):
-    # switched to GET to avoid CSRF
     url = f"{API_BASE}/refresh"
     name = f"{DOMAIN}:refresh"
-    requires_auth = False  # public
+    requires_auth = False
     cors_allowed = True
     def __init__(self, hass: HomeAssistant) -> None:
         self.hass = hass
     async def get(self, request):
-        await _refresh(self.hass, force=True)
-        return self.json({"ok": True})
+        try:
+            await _refresh(self.hass, force=True)
+            return self.json({"ok": True})
+        except Exception as e:
+            _LOGGER.exception("Blueprint Browser refresh failed")
+            return self.json({"ok": False, "error": f"{type(e).__name__}: {e}"})
 
 class BlueprintStaticView(HomeAssistantView):
     """Serve /panel files without static-path API (version-proof)."""
     url = f"{STATIC_BASE}/{{filename:.*}}"
     name = f"{DOMAIN}:static"
-    requires_auth = False  # public to prevent 401 in iframe
+    requires_auth = False
     cors_allowed = True
     def __init__(self, panel_dir: str) -> None:
         self._panel_dir = panel_dir
@@ -176,16 +213,13 @@ async def _register_panel_and_routes(hass: HomeAssistant):
     if store.get("registered"):
         return
 
-    # API views
     hass.http.register_view(BlueprintListView(hass))
     hass.http.register_view(BlueprintTopicView(hass))
     hass.http.register_view(BlueprintRefreshView(hass))
 
-    # Static files served via our own view
     panel_dir = os.path.join(os.path.dirname(__file__), "panel")
     hass.http.register_view(BlueprintStaticView(panel_dir))
 
-    # Sidebar panel (handle sync/async across HA versions)
     reg = getattr(ha_frontend, "async_register_built_in_panel", None)
     if reg:
         result = reg(
@@ -199,7 +233,6 @@ async def _register_panel_and_routes(hass: HomeAssistant):
         )
         if inspect.isawaitable(result):
             await result
-
     store["registered"] = True
 
 # ---------- HA entry points ----------
@@ -218,7 +251,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Remove panel if available (supports both sync/async)
     rem = getattr(ha_frontend, "async_remove_panel", None)
     if rem:
         result = rem(hass, DOMAIN)
