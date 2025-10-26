@@ -1,16 +1,17 @@
 /* Blueprint Store – focused fixes
- * - single expanding description with dark bg (read-more + dblclick)
- * - robust search over title+excerpt+tags with token scoring
- * - accurate Creators Spotlight (popular=likes, uploaded=count, recent=newest)
- * - title parsing (strip [Blueprint], leading emoji, special chars except (), smart Title Case)
- * - streaming tag assignment; default Other
+ * - single expanding description with dark bg (read-more + dbl-click)
+ * - keep expansion state when scrolling/re-rendering
+ * - filter “image1234x567 12.3 KB” attachment links out of cooked HTML
+ * - if cooked post contains >1 “Import to Home Assistant” links, gray the card’s CTA and show “Read Description”
+ * - move Creators Spotlight rendering into footer (IDs unchanged)
+ * - robust search + tags unchanged from last good build
  */
 
 const API = "/api/blueprint_store";
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-/* ---------- small helpers ---------- */
+/* ---------- helpers ---------- */
 const esc = s => (s ?? "").toString().replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const debounce = (fn, ms = 280) => { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
@@ -40,7 +41,7 @@ async function fetchJSON(url, tries=4){
   }
 }
 
-/* ---------- resilient external opener ---------- */
+/* safe external open */
 function openExternal(url){
   try{
     const w = window.open("", "_blank");
@@ -61,7 +62,7 @@ function openExternal(url){
   return false;
 }
 
-/* ---------- curated tags (compact; 3+ hits rule; default Other) ---------- */
+/* ---------- tags (unchanged behaviour) ---------- */
 const TAG_DEFS = [
   ["Lighting", ["light","lights","led","bulb","strip","rgb","rgbw","rgbcw","cct","dimmer","brightness","fade","color","hue","lifx","nanoleaf","govee","wiz","tradfri","philips","tuya","yeelight","ambilight","downlight","spotlight","lamp","wallwash","illumination","backlight","nightlight","switchlight","scene","motionlight"]],
   ["Climate & Ventilation", ["temp","temperature","climate","hvac","thermostat","heating","cooling","ventilation","fan","radiator","heatpump","humidifier","dehumidifier","aircon","ac","ecobee","nest","tado","honeywell","daikin","mitsubishi","bosch","trane","furnace","minisplit","heater","boiler","vent","aqara"]],
@@ -81,8 +82,6 @@ const TAG_DEFS = [
   ["Other", []]
 ];
 const TAG_ORDER = TAG_DEFS.map(([n])=>n);
-
-/* tag extractor (needs >=3 hits for any tag) */
 function deriveTags(text){
   const t = text.toLowerCase();
   const hits = [];
@@ -104,30 +103,37 @@ function sanitizeTitle(raw){
   let s = (raw || "").toString();
   s = s.replace(/\[blueprint\]/i, "");
   s = s.replace(LEADING_EMOJI_RE, "");
-  // allow (), dash, colon; strip other specials
   s = s.replace(/[^0-9A-Za-z()\-: ]+/g, " ").replace(/\s{2,}/g," ").trim();
-
-  // Smart Title Case (keep short ALL-CAPS as acronyms)
   s = s.split(" ").map(w=>{
-    if (w.length <= 4 && w === w.toUpperCase()) return w;    // ACRONYM
+    if (w.length <= 4 && w === w.toUpperCase()) return w;
     return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
   }).join(" ");
   return s;
 }
 
-/* ---------- description renderer (single area) ---------- */
+/* ---------- cooked HTML sanitation ---------- */
 function setPostHTMLInto(container, html){
-  // make links open via redirect + in new tab
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // compact My Home Assistant big import links to a simple pill (kept for logic)
-  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
-    a.setAttribute("target","_blank");
-    a.setAttribute("rel","noopener");
+  // remove “image1234x567 12.3 KB” style attachment links / meta
+  tmp.querySelectorAll("a").forEach(a=>{
+    const txt = (a.textContent||"").trim().toLowerCase();
+    const href = a.getAttribute("href")||"";
+    const looksImageLabel = /^image\d+x\d+/.test(txt) || /kb$/.test(txt);
+    const looksAttachment = a.classList.contains("attachment") || a.classList.contains("lightbox");
+    const isImageFile = /\.(jpg|jpeg|png|gif|webp|avif)(\?|$)/i.test(href);
+    if (looksImageLabel || looksAttachment || isImageFile){
+      // keep actual <img> tags, but drop orphan “image123x…” labels
+      if (!a.querySelector("img")) a.remove();
+    }
+  });
+  tmp.querySelectorAll(".meta, .filename, figcaption").forEach(n=>{
+    const t = (n.textContent||"").trim().toLowerCase();
+    if (/^image\d+x\d+/.test(t) || /kb$/.test(t)) n.remove();
   });
 
-  // rewrite community links through server redirect (keeps them working)
+  // rewrite community links via redirect
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
     const href = a.getAttribute("href");
     try{
@@ -147,6 +153,11 @@ function setPostHTMLInto(container, html){
     }catch{}
   });
 
+  // open MyHA redirects in new tab
+  tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
+    a.target = "_blank"; a.rel="noopener";
+  });
+
   container.innerHTML = "";
   while (tmp.firstChild) container.appendChild(tmp.firstChild);
 }
@@ -158,27 +169,42 @@ function tokenize(q){
 function scoreItem(item, tokens){
   if (!tokens.length) return 1;
   const hay = (item._searchText || "").toLowerCase();
-  let s = 0;
-  for (const t of tokens) if (hay.includes(t)) s++;
+  let s = 0; for (const t of tokens) if (hay.includes(t)) s++;
   return s;
 }
 
 /* ---------- Spotlight model ---------- */
 const spotlight = {
-  popular: null,           // item with max likes
-  recent:  null,           // newest item
-  counts:  new Map(),      // author -> count
-  topAuthor(){             // returns {author, count}
+  popular: null,
+  recent:  null,
+  counts:  new Map(),
+  topAuthor(){
     let a=null,c=0;
     for (const [k,v] of this.counts){ if (v>c){ a=k; c=v; } }
     return a?{author:a,count:c}:null;
   }
 };
 
-/* ---------- cache ---------- */
-const detailCache = new Map();
+/* ---------- caches & state ---------- */
+const detailCache = new Map();   // id -> { html, importCnt }
+const openState = new Set();     // expanded cards by id
 
 /* ---------- card renderer ---------- */
+function tagPills(tags){
+  const set = [];
+  (tags||[]).forEach(t=>{
+    const v=(t||"").toString().trim();
+    if (v && !set.includes(v)) set.push(v);
+  });
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,5).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+}
+function formatLikes(n){
+  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1)}M`.replace(/\.0$/,"M");
+  if (n >= 1_000) return `${(n/1_000).toFixed(1)}k`.replace(/\.0$/,"k");
+  return `${n}`;
+}
+
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
@@ -187,11 +213,9 @@ function renderCard(it){
   const author = it.author ? `by ${esc(it.author)}` : "";
   const likes  = toNum(it.likes || it.like_count || 0);
 
-  // searchable text (title + excerpt + tag strings)
   const tagsTxt = (it.tags || []).join(" ");
   it._searchText = `${title} ${it.excerpt||""} ${tagsTxt}`;
 
-  // main template
   el.innerHTML = `
     <h3 class="card__title">${esc(title)}</h3>
     ${author ? `<div class="author">${author}</div>` : ""}
@@ -202,7 +226,7 @@ function renderCard(it){
 
     <div class="card__footer">
       <div class="likes-pill"><span class="icon-heart"></span>${formatLikes(likes)} <b>Liked This</b></div>
-      <a class="myha-btn" data-open="${esc(it.import_url)}">
+      <a class="myha-btn" id="cta-${it.id}" data-open="${esc(it.import_url)}">
         <sl-icon name="house"></sl-icon>
         Import to Home Assistant
       </a>
@@ -211,29 +235,41 @@ function renderCard(it){
     <button class="toggle" id="tgl-${it.id}" type="button">Read more</button>
   `;
 
-  // expand/collapse logic (single area grows)
-  const wrap = el.querySelector(`#desc-${it.id}`);
+  const wrap   = el.querySelector(`#desc-${it.id}`);
   const toggle = el.querySelector(`#tgl-${it.id}`);
-  let expanded = false;
+  const cta    = el.querySelector(`#cta-${it.id}`);
+  let expanded = openState.has(it.id);
+
+  function setCTAForMultiple(){
+    cta.classList.add("disabled");
+    cta.removeAttribute("data-open");
+    cta.textContent = "Read Description";
+  }
+  function setCTAForSingle(){
+    cta.classList.remove("disabled");
+    if (it.import_url) cta.setAttribute("data-open", it.import_url);
+    cta.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
+  }
 
   async function expandNow(){
     if (expanded) return;
-    expanded = true;
+    expanded = true; openState.add(it.id);
     toggle.disabled = true;
     try{
       if (!detailCache.has(it.id)){
         const data = await fetchJSON(`${API}/topic?id=${it.id}`);
         const cooked = data.cooked || "<em>No content.</em>";
-        // store cooked & detect multiple import links for possible UI elsewhere (kept logic)
         const importCnt = (cooked.match(/my\.home-assistant\.io\/redirect\/blueprint_import/gi)||[]).length;
         detailCache.set(it.id, { html: cooked, importCnt });
       }
-      const { html } = detailCache.get(it.id);
+      const { html, importCnt } = detailCache.get(it.id);
       const holder = document.createElement("div");
       setPostHTMLInto(holder, html);
-      wrap.innerHTML = "";            // replace excerpt
+      wrap.innerHTML = "";
       wrap.appendChild(holder);
       toggle.textContent = "Less";
+      if (importCnt > 1) setCTAForMultiple();
+      else setCTAForSingle();
     }catch(e){
       wrap.innerHTML = `<div class="desc"><em>Failed to load post: ${esc(String(e.message||e))}</em></div>`;
       toggle.textContent = "Less";
@@ -242,44 +278,30 @@ function renderCard(it){
     }
   }
   function collapseNow(){
-    expanded = false;
+    expanded = false; openState.delete(it.id);
     wrap.innerHTML = `<div class="desc">${esc(it.excerpt || "")}</div>`;
     toggle.textContent = "Read more";
   }
 
   toggle.addEventListener("click", ()=> expanded ? collapseNow() : expandNow());
-  // double click anywhere on card to toggle
   el.addEventListener("dblclick",(e)=>{
-    // ignore dblclicks on buttons/links
     if (e.target.closest("a,button")) return;
     expanded ? collapseNow() : expandNow();
   });
 
-  // import button
   el.addEventListener("click",(ev)=>{
     const a = ev.target.closest("[data-open]");
-    if (!a) return;
+    if (!a || a.classList.contains("disabled")) return;
     ev.preventDefault();
     openExternal(a.getAttribute("data-open"));
   });
 
+  // restore expanded content if user had it open and list re-rendered
+  if (expanded){
+    (async ()=>{ await expandNow(); })();
+  }
+
   return el;
-}
-
-function tagPills(tags){
-  const set = [];
-  (tags||[]).forEach(t=>{
-    const v=(t||"").toString().trim();
-    if (v && !set.includes(v)) set.push(v);
-  });
-  if (!set.length) return "";
-  return `<div class="tags">${set.slice(0,5).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
-}
-
-function formatLikes(n){
-  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1)}M`.replace(/\.0$/,"M");
-  if (n >= 1_000) return `${(n/1_000).toFixed(1)}k`.replace(/\.0$/,"k");
-  return `${n}`;
 }
 
 /* ---------- Spotlight UI ---------- */
@@ -288,15 +310,15 @@ function updateSpotlightUI(root, stateReady){
   const u = $("#spot-uploaded");
   const r = $("#spot-recent");
   const spinner = $("#spot-spin");
+  if (!s || !u || !r) return;
 
   if (!stateReady){
     s.innerHTML = u.innerHTML = r.innerHTML = "";
-    spinner.style.display = "block";
+    if (spinner) spinner.style.display = "block";
     return;
   }
-  spinner.style.display = "none";
+  if (spinner) spinner.style.display = "none";
 
-  // popular
   if (spotlight.popular){
     const it = spotlight.popular;
     s.innerHTML = `
@@ -305,8 +327,6 @@ function updateSpotlightUI(root, stateReady){
       <div class="spot-title">${esc(sanitizeTitle(it.title||""))}</div>
     `;
   }
-
-  // uploaded
   const top = spotlight.topAuthor();
   if (top){
     u.innerHTML = `
@@ -315,8 +335,6 @@ function updateSpotlightUI(root, stateReady){
       <div class="spot-meta">${top.count} Blueprints</div>
     `;
   }
-
-  // recent
   if (spotlight.recent){
     const it = spotlight.recent;
     r.innerHTML = `
@@ -327,7 +345,7 @@ function updateSpotlightUI(root, stateReady){
   }
 }
 
-/* ---------- main boot ---------- */
+/* ---------- main ---------- */
 function boot(){
   const list     = $("#list");
   const empty    = $("#empty");
@@ -335,18 +353,15 @@ function boot(){
   const searchEl = $("#search");
   const sortSel  = $("#sort");
   const refresh  = $("#refresh");
-  const tagdd    = $("#tagdd");
-  const tagbtn   = $("#tagbtn");
   const tagmenu  = $("#tagmenu");
+  const tagbtn   = $("#tagbtn");
   const sentinel = $("#sentinel");
 
-  if (!list) return;
-
   let page = 0, hasMore = true, loading=false;
-  let items = [];           // total pool (streamed)
+  let items = [];
   let qText = "";
   let sort = "likes";       // likes | new | title
-  let bucket = "";          // tag filter
+  let bucket = "";
 
   function setError(msg){ errorB.style.display="block"; errorB.textContent=msg; }
   function clearError(){ errorB.style.display="none"; errorB.textContent=""; }
@@ -359,24 +374,17 @@ function boot(){
 
   function pushAndUpdateSpotlight(batch){
     for (const it of batch){
-      // clean title early for spotlight view & search text
       it.title = sanitizeTitle(it.title||"");
       applyTagsTo(it);
-
-      // spotlight: popular
       const lk = toNum(it.likes||it.like_count);
       if (!spotlight.popular || lk > toNum(spotlight.popular.likes||spotlight.popular.like_count)) {
         spotlight.popular = it;
       }
-      // spotlight: recent (use created_ts if present; else fallback id)
       const t = toNum(it.created_ts || it.created || it.id || 0);
       if (!spotlight.recent || t > toNum(spotlight.recent.created_ts || spotlight.recent.created || spotlight.recent.id || 0)){
         spotlight.recent = it;
       }
-      // uploaded counts
-      if (it.author){
-        spotlight.counts.set(it.author, (spotlight.counts.get(it.author)||0)+1);
-      }
+      if (it.author) spotlight.counts.set(it.author, (spotlight.counts.get(it.author)||0)+1);
     }
     updateSpotlightUI($("#spotlight"), true);
   }
@@ -403,24 +411,23 @@ function boot(){
     return await fetchJSON(url.toString());
   }
 
-  function recomputeAndRender(initial=false){
-    // filter & score
+  function tokenize(q){ return (q||"").toLowerCase().replace(/[^\p{L}\p{N} ]+/gu," ").split(/\s+/).filter(Boolean); }
+  function scoreItem(item, tokens){
+    if (!tokens.length) return 1;
+    const hay = (item._searchText||"").toLowerCase();
+    let s = 0; for (const t of tokens) if (hay.includes(t)) s++; return s;
+  }
+
+  function recomputeAndRender(){
     const tokens = tokenize(qText);
     let pool = items.slice();
-
-    // tag filter
     if (bucket) pool = pool.filter(it => (it.tags||[]).includes(bucket));
-
-    // search score
     pool = pool.map(it => ({ it, sc: scoreItem(it, tokens) }))
                .filter(({sc}) => (tokens.length ? sc>0 : true));
-
-    // sort within the filtered pool
-    if (sort === "new") pool.sort((a,b)=> toNum((b.it.created_ts||b.it.created||b.it.id) ) - toNum((a.it.created_ts||a.it.created||a.it.id)));
+    if (sort === "new") pool.sort((a,b)=> toNum((b.it.created_ts||b.it.created||b.it.id)) - toNum((a.it.created_ts||a.it.created||a.it.id))).reverse();
     else if (sort === "title") pool.sort((a,b)=> a.it.title.localeCompare(b.it.title));
-    else pool.sort((a,b)=> toNum(b.it.likes||b.it.like_count) - toNum(a.it.likes||a.it.like_count)); // likes
+    else pool.sort((a,b)=> toNum(b.it.likes||b.it.like_count) - toNum(a.it.likes||a.it.like_count));
 
-    // render
     list.innerHTML = "";
     if (!pool.length){ empty.style.display="block"; return; }
     empty.style.display="none";
@@ -433,14 +440,14 @@ function boot(){
     try{
       const data = await fetchPage(p);
       const batch = (data.items || []).map(it => {
-        it.tags = (it.tags || []).slice(0,4);   // keep upstream tags but we’ll enrich
+        it.tags = (it.tags || []).slice(0,4);
         return it;
       });
       batch.forEach(applyTagsTo);
       items.push(...batch);
       hasMore = !!data.has_more;
       pushAndUpdateSpotlight(batch);
-      recomputeAndRender(p===0);
+      recomputeAndRender();
     }catch(e){
       setError(`Failed to load: ${String(e.message||e)}`);
     }finally{
@@ -452,30 +459,23 @@ function boot(){
     page = 0; hasMore = true; items = [];
     updateSpotlightUI($("#spotlight"), false);
     await loadPage(page);
-    // stream following pages in background
     (async ()=>{
       while (hasMore){
-        await sleep(400);  // gentle stream to avoid 429
+        await sleep(400);
         page += 1;
         await loadPage(page);
       }
     })();
   }
 
-  async function reflow(){ recomputeAndRender(); }
-
-  // UI wire-up
+  // UI
   if (searchEl){
-    const onSearch = debounce(()=>{ qText = (searchEl.value||"").trim(); reflow(); }, 160);
+    const onSearch = debounce(()=>{ qText = (searchEl.value||"").trim(); recomputeAndRender(); }, 160);
     searchEl.addEventListener("sl-input", onSearch);
     searchEl.addEventListener("sl-clear", onSearch);
   }
-  if (sortSel){
-    sortSel.addEventListener("sl-change", ()=>{ sort = sortSel.value || "likes"; reflow(); });
-  }
-  if (refresh){
-    refresh.addEventListener("click", async ()=>{ await loadAll(); });
-  }
+  if (sortSel) sortSel.addEventListener("sl-change", ()=>{ sort = sortSel.value || "likes"; recomputeAndRender(); });
+  if (refresh) refresh.addEventListener("click", async ()=>{ await loadAll(); });
 
   if (sentinel){
     const io = new IntersectionObserver(e=>{
@@ -489,6 +489,3 @@ function boot(){
 }
 
 document.addEventListener("DOMContentLoaded", boot);
-
-/* ---------- tiny CSS hooks injected (kept from HTML when self-hosting) ---------- */
-// (left empty on purpose; styles live in index.html)
