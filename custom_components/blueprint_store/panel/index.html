@@ -10,17 +10,14 @@
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (for attractive removable chips) -->
+    <!-- Material Web (for removable chips) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
 
     <style>
       :root{
-        /* Brand + base */
         --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-
-        /* Cards / panel */
         --panel-bg: rgba(12,26,74,.92);
         --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
         --card-bd: rgba(170,200,255,.22);
@@ -28,11 +25,10 @@
         --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1200px;
 
-        /* Shoelace tokens (opaque controls) */
-        --sl-input-background-color: rgba(16,34,86,.98);
-        --sl-input-border-color: rgba(255,255,255,.18);
-        --sl-panel-background-color: rgba(16,34,86,.98);
+        --sl-input-background-color: transparent;         /* transparent search */
+        --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
+        --sl-panel-background-color: rgba(16,34,86,.98);
       }
 
       body{
@@ -41,7 +37,6 @@
         background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
         min-height:100vh;
       }
-      /* Blueprint grid overlay */
       body::after{
         content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
         background-image:
@@ -50,7 +45,6 @@
         background-size: 28px 28px;
       }
 
-      /* Header */
       header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
       .bar{
         max-width:var(--maxw); margin:0 auto; padding:8px 12px;
@@ -58,18 +52,22 @@
       }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
+      sl-input::part(base){ background:transparent; }
+      sl-input::part(input){ color:#fff; }
+      sl-input::part(form-control-label){ color:#fff; }
+      sl-button.white::part(base){
+        background:transparent; color:#fff; border:1px solid rgba(255,255,255,.65);
+      }
+      sl-button::part(base){ box-shadow:none; } /* remove outlines */
 
       main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
 
-      /* Banner */
       .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
 
-      /* Top toolbar under banner */
-      .toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 6px 0 4px; }
-      .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+      .toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 6px 0 12px; }
+      .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-left:auto; }
 
-      /* Blue glow track behind lists */
       .cards-wrap{ position:relative; }
       .cards-wrap::before{
         content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
@@ -78,26 +76,21 @@
         filter: blur(18px);
       }
 
-      .section-title{ margin:14px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+      .section-title{ margin:8px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
 
-      /* Cards */
       .card{
         border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
         box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
       }
       .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
-      .card__ribbon{
-        height:4px; border-radius:999px; margin:-2px auto 10px; width:96%;
-        background: linear-gradient(90deg, #51b8ff, #a1d6ff);
-        opacity:.85;
-      }
       .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
       .card h3{ margin:0; font-size:18px; font-weight:900; }
       .author{ opacity:.92; font-weight:700; }
-      .desc{ color:var(--muted); margin:8px 0 12px; line-height:1.55; }
-      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
-      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+      .desc{ color:var(--muted); margin:8px 0 8px; line-height:1.55; }
+      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
       .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
+      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
+      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:10px; }
 
       /* My Home Assistant–style Import button */
       .myha-btn{
@@ -111,18 +104,24 @@
       }
       .myha-btn:active{ transform: translateY(1px); }
 
+      /* Read-more block */
+      .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
+      .more :where(h1,h2,h3){ font-weight:800; }
+      .more img{ max-width:100%; height:auto; border-radius:8px; }
+      .more a{ color:#aee1ff; }
+      .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
+      .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; }
+
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
 
-      /* Make Shoelace dropdowns non-transparent */
-      sl-select::part(combobox){ background: var(--sl-input-background-color); }
-      sl-select::part(listbox){ background: var(--sl-panel-background-color); }
-      sl-input::part(base){ background: var(--sl-input-background-color); }
       sl-drawer::part(panel){ background: var(--panel-bg); border:1px solid rgba(255,255,255,.16); }
+      .tag-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+      .tag-btn::part(base){ background:#0e2a66; color:#cfe2ff; border:1px solid #29539a; }
+      .tag-btn.selected::part(base){ background:#2b62c9; border-color:#6fa9ff; color:white; }
     </style>
   </head>
   <body>
-    <!-- Sticky top bar -->
     <header>
       <div class="bar">
         <div class="brand">
@@ -140,26 +139,19 @@
           <sl-option value="uses">Most used</sl-option>
         </sl-select>
 
-        <sl-button id="open-filters" variant="default" pill caret>
-          Filters
-        </sl-button>
+        <sl-button id="open-filters" class="white" pill caret>Filters</sl-button>
       </div>
     </header>
 
     <main>
-      <!-- Banner -->
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <!-- Active filters (chips) -->
       <div class="toolbar">
+        <sl-button id="refresh" class="white" pill>Refresh</sl-button>
         <div id="active-chips" class="chips"></div>
-        <sl-button id="refresh" variant="primary" pill>Refresh</sl-button>
       </div>
 
-      <div class="section-title">Top 10</div>
-      <div id="top10" class="cards-wrap"></div>
-
-      <div class="section-title" style="margin-top:16px">All blueprints</div>
+      <div class="section-title">All blueprints</div>
       <div id="list" class="cards-wrap"></div>
 
       <p id="empty" style="display:none">No blueprints matched.</p>
@@ -167,27 +159,19 @@
       <div id="sentinel"></div>
     </main>
 
-    <!-- Filter Drawer (menu) -->
+    <!-- Filter Drawer -->
     <sl-drawer label="Filters" placement="end" id="filters-drawer">
       <div style="display:flex;flex-direction:column;gap:14px">
-        <div>
-          <strong>Search tags</strong>
-          <sl-input id="tag-search" placeholder="Type to filter tags…" clearable></sl-input>
-        </div>
-
-        <div>
-          <strong>Tags</strong>
-          <div id="tags-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:50vh;overflow:auto;border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:8px;"></div>
-        </div>
-
+        <strong>Categories</strong>
+        <sl-input id="tag-search" placeholder="Type to filter categories…" clearable></sl-input>
+        <div id="tags-grid" class="tag-grid"></div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
-          <sl-button id="clear-filters" variant="default">Clear</sl-button>
+          <sl-button id="clear-filters" class="white">Clear</sl-button>
           <sl-button id="apply-filters" variant="primary">Apply</sl-button>
         </div>
       </div>
     </sl-drawer>
 
-    <!-- IMPORTANT: module so we can use top-level await in app.js -->
     <script type="module" src="./app.js"></script>
   </body>
 </html>
