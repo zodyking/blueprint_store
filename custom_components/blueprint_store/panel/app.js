@@ -31,17 +31,10 @@ async function fetchJSON(url, tries=3){
   }
 }
 
-/* ----- top-window navigation (most reliable from sandboxed panel) ----- */
-function navigateTop(url){
-  try { window.top.location.assign(url); }
-  catch { location.assign(url); }
-}
-
 /* pill buttons */
 function importButton(href){
-  const safe = esc(href);
   return `
-    <a class="myha-btn" href="${safe}" title="Open (Ctrl/Cmd+Click for new tab)">
+    <a class="myha-btn" href="${esc(href)}" target="_blank" rel="noopener noreferrer">
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
@@ -52,10 +45,6 @@ function viewDescButton(){
       <sl-icon name="document-text"></sl-icon>
       View description
     </button>`;
-}
-function forumButtonHref(tid, slug){
-  const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
-  return `${API}/go?${qs}`;
 }
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
@@ -70,58 +59,25 @@ function tagPills(tags){
   return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
 }
 
-/* -------- normalize post HTML & rewrite forum links via redirect ------ */
-function rewriteToRedirect(href){
-  try{
-    const u = new URL(href);
-    if (u.hostname !== "community.home-assistant.io") return null;
-    const parts = u.pathname.split("/").filter(Boolean);
-    const idx = parts.indexOf("t");
-    if (idx === -1) return null;
-    let slug = "", id = "";
-    if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) {
-      id = parts[idx+1];
-    } else {
-      slug = (parts[idx+1] || "");
-      id = (parts[idx+2] || "").replace(/[^0-9]/g, "");
-    }
-    if (!id) return null;
-    const qs = new URLSearchParams({ tid: id, slug }).toString();
-    return `${API}/go?${qs}`;
-  }catch{ return null; }
-}
-
+/* --- Rich post HTML (read more) --- */
 function setPostHTML(container, html){
   const tmp = document.createElement("div");
   tmp.innerHTML = html || "<em>Nothing to show.</em>";
 
-  // Convert big MyHA banners to compact pill
+  // Compact MyHA import banners into our pill button
   tmp.querySelectorAll('a[href*="my.home-assistant.io/redirect/blueprint_import"]').forEach(a=>{
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
     pill.className = "myha-btn myha-inline-import";
     pill.href = href;
-    pill.title = "Open (Ctrl/Cmd+Click for new tab)";
+    pill.target = "_blank";
+    pill.rel = "noopener noreferrer";
+    pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
     a.replaceWith(pill);
   });
 
-  // Rewrite forum-topic links to same-origin redirect
-  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
-    const redir = rewriteToRedirect(a.getAttribute("href"));
-    if (redir) a.setAttribute("href", redir);
-  });
-
-  // intercept clicks inside description: navigate the top window
-  tmp.addEventListener("click", (ev)=>{
-    const a = ev.target.closest("a[href]");
-    if (!a) return;
-    // allow Ctrl/Cmd click to open in new tab
-    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return;
-    const href = a.getAttribute("href");
-    if (!href) return;
-    ev.preventDefault();
-    navigateTop(href);
-  });
+  // Open all external links in a new tab (keeps the HA panel intact)
+  tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
 
   container.innerHTML = "";
   container.appendChild(tmp);
@@ -136,7 +92,10 @@ function renderCard(it){
   el.className = "card";
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
-  const forumHref = forumButtonHref(it.id, it.slug || "");
+
+  // likes/replies fallback to 0 if not present
+  const likes   = Number(it.likes   ?? 0);
+  const replies = Number(it.replies ?? it.comments ?? 0);
 
   el.innerHTML = `
     <div class="row">
@@ -151,10 +110,15 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      <a class="myha-btn secondary" href="${esc(forumHref)}" title="Open (Ctrl/Cmd+Click for new tab)">
-        <sl-icon name="box-arrow-up-right"></sl-icon>
-        Forum post
-      </a>
+      <div class="stats">
+        <sl-badge pill variant="primary">
+          <sl-icon name="heart"></sl-icon>${likes.toLocaleString()}
+        </sl-badge>
+        <sl-badge pill variant="neutral">
+          <sl-icon name="chat-dots"></sl-icon>${replies.toLocaleString()}
+        </sl-badge>
+      </div>
+
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -190,17 +154,6 @@ function renderCard(it){
     } else {
       await expandNow();
     }
-  });
-
-  // Intercept normal clicks on footer links to navigate top window
-  el.querySelectorAll(".card__footer a[href]").forEach(a=>{
-    a.addEventListener("click", (ev)=>{
-      if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // allow new-tab gestures
-      const href = a.getAttribute("href");
-      if (!href) return;
-      ev.preventDefault();
-      navigateTop(href);
-    });
   });
 
   const viewBtn = el.querySelector('button[data-viewdesc="1"]');
