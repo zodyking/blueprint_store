@@ -5,28 +5,29 @@
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Shoelace (unchanged) -->
+    <!-- Shoelace (icons/select/input) -->
     <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
 
     <style>
       :root{
-        --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
+        --blue-1:#0d5fe0; --blue-2:#0c3d97; --ink:#e6f0ff; --muted:#b9c7e6;
         --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
         --card-bd: rgba(170,200,255,.22);
         --card-bd-hover:#9dd1ff66;
         --shadow: 0 18px 50px rgba(6,16,50,.45);
-        --maxw: 1200px;
+        --maxw: 1180px;
 
         --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
         --sl-color-neutral-0: rgba(16,34,86,.98);
         --sl-panel-background-color: rgba(16,34,86,.98);
       }
-      *{box-sizing:border-box}
+      *{ box-sizing:border-box; }
       body{
         margin:0; color:var(--ink);
-        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
-        background: linear-gradient(180deg, #0a5bd8 0%, #0a4bb6 30%, #0a3c98 100%);
+        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, Arial;
+        background:
+          linear-gradient(180deg, #0e52cf 0%, #0b2a7a 100%);
         min-height:100vh;
       }
       body::after{
@@ -38,13 +39,20 @@
       }
 
       header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
-      .bar{ max-width:var(--maxw); margin:0 auto; padding:8px 12px; display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center; }
+      .bar{
+        max-width:var(--maxw); margin:0 auto; padding:8px 12px;
+        display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center;
+      }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
 
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
-      sl-button.plain::part(base){ background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px; }
+      sl-input::part(form-control-label){ color:#fff; }
+
+      sl-button.plain::part(base){
+        background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
+      }
       sl-button.plain::part(base):hover{ text-decoration: underline; }
 
       main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
@@ -52,42 +60,44 @@
       .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
 
-      .section-title{ margin:8px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+      .section-title{ margin:18px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
 
-      .cards-wrap{ position:relative; }
+      /* spotlight */
+      .spot{ margin-top:8px; padding:16px; border-radius:18px; background:var(--card-bg); border:1px solid var(--card-bd); box-shadow: var(--shadow); }
+      .spot-grid{ display:grid; grid-template-columns:1fr; gap:12px; }
+      @media (min-width:900px){ .spot-grid{ grid-template-columns:repeat(3,1fr); } }
+      .spot-item{ padding:14px; border-radius:12px; border:1px solid #3d5aa844; background: linear-gradient(180deg, rgba(10,20,52,.64), rgba(8,18,46,.74)); min-height:116px; }
+      .spot-head{ font-weight:900; opacity:.95; margin-bottom:6px; }
+      .spot-author{ font-weight:800; margin-bottom:6px; }
+      .spot-title{ color:#dfe8ff; }
+      #spot-spin{ display:none; text-align:center; padding:10px 0; opacity:.8; }
+
+      /* cards */
       .card{
         border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
         box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
       }
       .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
-      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
-      .card h3{ margin:0; font-size:18px; font-weight:900; }
-      .author{ opacity:.92; font-weight:700; }
+      .card__title{ margin:0 0 4px; font-size:18px; font-weight:900; }
+      .author{ opacity:.92; font-weight:700; margin-bottom:8px; }
       .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
       .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
-      .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
-      .heart{ font-weight:900; margin-left:2px; }
 
-      /* single description with dark background that expands/collapses */
       .desc-wrap{
-        background: rgba(3,18,48,.65);
-        border: 1px solid rgba(255,255,255,.12);
+        background: rgba(5,12,36,.66);
+        border: 1px solid rgba(158,186,255,.18);
         border-radius: 12px;
-        padding: 10px 12px;
-        max-height: 84px;
-        overflow: hidden;
-        transition: max-height .28s ease;
+        padding: 12px;
       }
-      .desc-wrap.expanded{ max-height: 1000px; }
+      .desc{ color:#e6edff; line-height:1.55; }
 
-      .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; margin-top:8px; }
-      .more{ display:none; margin-top:8px; border-top:1px solid rgba(255,255,255,.16); padding-top:8px; }
-      .more :where(h1,h2,h3){ font-weight:800; }
-      .more img{ max-width:100%; height:auto; border-radius:8px; }
-      .more a{ color:#aee1ff; }
-      .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
+      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+      .likes-pill{
+        display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px;
+        border:1px solid #8fb6ff55; background:#0a1a42; font-weight:800;
+      }
+      .icon-heart{ width:18px; height:18px; display:inline-block; mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="white" d="M12 21s-6.716-4.675-9.428-7.387C.86 11.9.5 10.61.5 9.5.5 6.462 2.962 4 6 4c1.64 0 3.09.79 4 2.017C10.91 4.79 12.36 4 14 4c3.038 0 5.5 2.462 5.5 5.5 0 1.11-.36 2.4-2.072 4.113C18.716 16.325 12 21 12 21z"/></svg>') center/contain no-repeat; background:#fff; }
 
-      .card__footer{ display:flex; justify-content:flex-end; align-items:center; margin-top:12px; }
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
         display:inline-flex; align-items:center; gap:8px;
@@ -98,23 +108,9 @@
         border: 1px solid rgba(255,255,255,.35);
       }
 
+      .toggle{ margin-top:10px; color:#cfe2ff; font-weight:800; cursor:pointer; background:transparent; border:none; }
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
-
-      /* Spotlight */
-      .contrib{ border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg); box-shadow:var(--shadow); padding:12px 12px 6px; margin:12px 0 16px; }
-      .contrib-head{ text-align:center; margin-bottom:8px; }
-      .contrib-title{ font-size:18px; font-weight:900; }
-      .contrib-sub{ opacity:.85; }
-      .spin{ width:20px; height:20px; margin:10px auto 14px; border-radius:50%; border:3px solid #fff4; border-top-color:#fff; animation:sp 1s linear infinite; }
-      @keyframes sp{ to{ transform:rotate(360deg)} }
-      .contrib-grid{ display:grid; grid-template-columns:1fr; gap:12px; }
-      @media (min-width: 900px){ .contrib-grid{ grid-template-columns:1fr 1fr 1fr; } }
-      .contrib-card{ border:1px solid #ffffff22; border-radius:14px; padding:12px; background:rgba(6,20,56,.6); }
-      .contrib-card-title{ font-weight:800; margin-bottom:6px; }
-      .contrib-author{ font-weight:800; margin-bottom:4px; }
-      .contrib-chip{ display:inline-block; padding:6px 10px; border-radius:999px; background:#0b3e86; border:1px solid #1f69d3; font-weight:800; }
-      .contrib-desc{ opacity:.95; }
     </style>
   </head>
   <body>
@@ -147,17 +143,25 @@
     <main>
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <div id="spotlight" class="contrib"></div>
+      <div id="spotlight" class="spot">
+        <div style="text-align:center; font-weight:900; margin-bottom:4px;">Creators Spotlight</div>
+        <div style="text-align:center; opacity:.85; margin-bottom:10px;">Shout-outs to makers moving the community forward.</div>
+        <div id="spot-spin">Loading…</div>
+        <div class="spot-grid">
+          <div class="spot-item" id="spot-popular"></div>
+          <div class="spot-item" id="spot-uploaded"></div>
+          <div class="spot-item" id="spot-recent"></div>
+        </div>
+      </div>
 
-      <div class="section-title">All blueprints</div>
-      <div id="list" class="cards-wrap"></div>
+      <div class="section-title" id="heading">All blueprints</div>
+      <div id="list"></div>
 
       <p id="empty" style="display:none">No blueprints matched.</p>
       <p id="error" style="display:none"></p>
       <div id="sentinel"></div>
     </main>
 
-    <!-- cache-busted -->
-    <script src="./app.js?v=fix-desc-spotlight-rl" defer></script>
+    <script src="./app.js?v=restore-single-desc-spot-accurate" defer></script>
   </body>
 </html>
