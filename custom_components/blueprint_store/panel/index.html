@@ -10,7 +10,7 @@
       src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
     </script>
 
-    <!-- Material Web (filter chips if we ever show “active” chips inline) -->
+    <!-- Material Web (for attractive removable chips) -->
     <script type="module">
       import 'https://esm.run/@material/web@1.0.0/chips/filter-chip.js';
     </script>
@@ -19,19 +19,22 @@
       :root{
         /* Brand + base */
         --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-        --card-bg: rgba(6,18,54,0.65);
-        --card-bd: rgba(255,255,255,0.16);
-        --panel-bg: rgba(10,26,70,.92);
-        --shadow: 0 10px 30px rgba(0,0,0,.35);
+
+        /* Cards / panel */
+        --panel-bg: rgba(12,26,74,.92);
+        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
+        --card-bd: rgba(170,200,255,.22);
+        --card-bd-hover:#9dd1ff66;
+        --shadow: 0 18px 50px rgba(6,16,50,.45);
         --maxw: 1200px;
 
-        /* Shoelace tokens (make inputs opaque) */
-        --sl-input-background-color: rgba(14,30,76,0.95);
+        /* Shoelace tokens (opaque controls) */
+        --sl-input-background-color: rgba(16,34,86,.98);
         --sl-input-border-color: rgba(255,255,255,.18);
         --sl-panel-background-color: rgba(16,34,86,.98);
+        --sl-color-neutral-0: rgba(16,34,86,.98);
       }
 
-      /* Page */
       body{
         margin:0; color:var(--ink);
         font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu;
@@ -48,62 +51,55 @@
       }
 
       /* Header */
-      header{ position:sticky; top:0; z-index:5; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
+      header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
       .bar{
         max-width:var(--maxw); margin:0 auto; padding:8px 12px;
-        display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center;
+        display:grid; grid-template-columns:auto 1fr auto auto; gap:10px; align-items:center;
       }
       .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
       .brand img{ width:28px; height:28px; border-radius:6px; }
 
-      /* Layout */
-      main{ max-width:var(--maxw); margin:12px auto 40px; padding:0 12px; }
-      .layout{ display:grid; grid-template-columns: 280px 1fr; gap:18px; }
+      main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
 
-      /* Sidebar */
-      aside{
-        position:sticky; top:72px;
-        background: var(--panel-bg);
-        border:1px solid var(--card-bd);
-        border-radius:16px; box-shadow: var(--shadow);
-        padding:14px;
-        height: fit-content;
-      }
-      .side-title{ font-weight:900; margin:0 0 10px; }
-      .side-group{ margin-bottom:14px; }
-      .tag-list{ display:flex; flex-direction:column; gap:6px; max-height: 42vh; overflow:auto; padding-right:6px; }
-      .side-row{ display:flex; gap:8px; align-items:center; }
-
-      /* Content */
-      .banner{ margin:8px 0 14px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
+      /* Banner */
+      .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
-      .section-title{ margin:10px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
 
-      /* Cards wrapper with glowing track */
+      /* Top toolbar under banner */
+      .toolbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin: 6px 0 4px; }
+      .chips{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+
+      /* Blue glow track behind lists */
       .cards-wrap{ position:relative; }
       .cards-wrap::before{
-        content:""; position:absolute; inset:-40px -20px -40px -20px; z-index:-1;
-        background: radial-gradient(60% 50% at 50% 10%, rgba(155,205,255,.18), transparent 60%),
+        content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
+        background: radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.18), transparent 60%),
                     radial-gradient(60% 60% at 50% 100%, rgba(40,140,255,.18), transparent 65%);
         filter: blur(18px);
       }
 
-      /* Card */
+      .section-title{ margin:14px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
+
+      /* Cards */
       .card{
-        background: var(--card-bg);
-        border:1px solid var(--card-bd);
-        border-radius:18px;
-        box-shadow: 0 18px 40px rgba(5,12,40,.45);
-        padding:16px; margin:12px 0;
+        border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
+        box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
       }
-      .card:hover{ border-color:#9dd1ff55; box-shadow: 0 22px 50px rgba(30,140,255,.28); }
-      .row{ display:flex; gap:10px; align-items:baseline; flex-wrap:wrap; }
+      .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
+      .card__ribbon{
+        height:4px; border-radius:999px; margin:-2px auto 10px; width:96%;
+        background: linear-gradient(90deg, #51b8ff, #a1d6ff);
+        opacity:.85;
+      }
+      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
       .card h3{ margin:0; font-size:18px; font-weight:900; }
-      .author{ opacity:.9; font-weight:700; }
+      .author{ opacity:.92; font-weight:700; }
       .desc{ color:var(--muted); margin:8px 0 12px; line-height:1.55; }
       .uses{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; font-weight:700; }
+      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+      .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
 
-      /* My Home Assistant–style Import button (inspired) */
+      /* My Home Assistant–style Import button */
       .myha-btn{
         --grad-a:#00b2ff; --grad-b:#0a84ff;
         display:inline-flex; align-items:center; gap:8px;
@@ -122,6 +118,7 @@
       sl-select::part(combobox){ background: var(--sl-input-background-color); }
       sl-select::part(listbox){ background: var(--sl-panel-background-color); }
       sl-input::part(base){ background: var(--sl-input-background-color); }
+      sl-drawer::part(panel){ background: var(--panel-bg); border:1px solid rgba(255,255,255,.16); }
     </style>
   </head>
   <body>
@@ -137,53 +134,58 @@
           <sl-icon name="search" slot="prefix"></sl-icon>
         </sl-input>
 
-        <sl-button id="refresh" variant="primary" pill>Refresh</sl-button>
+        <sl-select id="sort" value="new" hoist>
+          <sl-option value="new">Newest</sl-option>
+          <sl-option value="title">Title A–Z</sl-option>
+          <sl-option value="uses">Most used</sl-option>
+        </sl-select>
+
+        <sl-button id="open-filters" variant="default" pill caret>
+          Filters
+        </sl-button>
       </div>
     </header>
 
     <main>
-      <div class="layout">
-        <!-- Sidebar filters -->
-        <aside>
-          <h3 class="side-title">Filters</h3>
+      <!-- Banner -->
+      <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-          <div class="side-group">
-            <div class="side-row">
-              <strong>Sort</strong>
-              <sl-select id="sort" value="new" hoist style="flex:1">
-                <sl-option value="new">Newest</sl-option>
-                <sl-option value="title">Title A–Z</sl-option>
-                <sl-option value="uses">Most used</sl-option>
-              </sl-select>
-            </div>
-          </div>
-
-          <div class="side-group">
-            <strong>Tags</strong>
-            <div class="tag-list" id="tags-list"><!-- sl-checkbox items injected --></div>
-          </div>
-
-          <div class="side-group">
-            <sl-button id="clear-filters" caret>Clear filters</sl-button>
-          </div>
-        </aside>
-
-        <!-- Content -->
-        <section>
-          <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
-
-          <div class="section-title">Top 10</div>
-          <div id="top10" class="cards-wrap"></div>
-
-          <div class="section-title" style="margin-top:16px">All blueprints</div>
-          <div id="list" class="cards-wrap"></div>
-
-          <p id="empty" style="display:none">No blueprints matched.</p>
-          <p id="error" style="display:none"></p>
-          <div id="sentinel"></div>
-        </section>
+      <!-- Active filters (chips) -->
+      <div class="toolbar">
+        <div id="active-chips" class="chips"></div>
+        <sl-button id="refresh" variant="primary" pill>Refresh</sl-button>
       </div>
+
+      <div class="section-title">Top 10</div>
+      <div id="top10" class="cards-wrap"></div>
+
+      <div class="section-title" style="margin-top:16px">All blueprints</div>
+      <div id="list" class="cards-wrap"></div>
+
+      <p id="empty" style="display:none">No blueprints matched.</p>
+      <p id="error" style="display:none"></p>
+      <div id="sentinel"></div>
     </main>
+
+    <!-- Filter Drawer (menu) -->
+    <sl-drawer label="Filters" placement="end" id="filters-drawer">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <strong>Search tags</strong>
+          <sl-input id="tag-search" placeholder="Type to filter tags…" clearable></sl-input>
+        </div>
+
+        <div>
+          <strong>Tags</strong>
+          <div id="tags-grid" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;max-height:50vh;overflow:auto;border:1px solid rgba(255,255,255,.15);border-radius:10px;padding:8px;"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+          <sl-button id="clear-filters" variant="default">Clear</sl-button>
+          <sl-button id="apply-filters" variant="primary">Apply</sl-button>
+        </div>
+      </div>
+    </sl-drawer>
 
     <!-- IMPORTANT: module so we can use top-level await in app.js -->
     <script type="module" src="./app.js"></script>
