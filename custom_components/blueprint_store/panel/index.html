@@ -64,9 +64,35 @@
       .uses{background:#ffffff22;border:1px solid #ffffff33;border-radius:999px;padding:3px 8px;font-weight:700}
 
       .card__footer{display:flex;justify-content:space-between;align-items:center;margin-top:12px}
-      .stats{display:flex;gap:8px;align-items:center}
-      .stats sl-badge::part(base){font-weight:800;padding:6px 10px}
-      .stats sl-icon{margin-right:6px}
+      .stats{display:flex;gap:10px;align-items:center}
+      .stat-pill{
+        display:inline-flex;align-items:center;gap:8px;
+        padding:8px 12px;border-radius:999px;font-weight:800;
+        border:1px solid rgba(255,255,255,.35);
+        background:linear-gradient(135deg,#1b2a6b,#2c57b8);
+        color:#eaf4ff; box-shadow:0 6px 16px rgba(4,96,200,.25), inset 0 1px 0 #fff3;
+        user-select:none; -webkit-user-select:none;
+      }
+      .stat-pill sl-icon{margin-right:2px}
+
+      .myha-btn{
+        --grad-a:#00b2ff; --grad-b:#0a84ff;
+        display:inline-flex;align-items:center;gap:8px;
+        padding:10px 14px;border-radius:999px;font-weight:800;
+        color:#032149;text-decoration:none;
+        background:linear-gradient(135deg,var(--grad-a),var(--grad-b));
+        box-shadow:0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
+        border:1px solid rgba(255,255,255,.35);
+      }
+      .myha-btn:active{transform:translateY(1px)}
+      .myha-btn.neutral{--grad-a:#6d7a92;--grad-b:#4e5a74;color:#f6f8ff}
+
+      .toggle{color:#cfe2ff;font-weight:700;cursor:pointer;user-select:none}
+      .more{display:none;margin-top:8px;border-top:1px solid rgba(255,255,255,.16);padding-top:8px}
+      .more :where(h1,h2,h3){font-weight:800}
+      .more img{max-width:100%;height:auto;border-radius:8px}
+      .more a{color:#aee1ff}
+      .more pre{white-space:pre-wrap;background:#07122f;padding:8px;border-radius:8px;overflow:auto}
 
       #error,#empty{text-align:center;color:#e7eefc}
       #sentinel{height:60px}
@@ -111,6 +137,6 @@
     </main>
 
     <!-- cache-busted so the new JS loads -->
-    <script src="./app.js?v=bs-badges-1" defer></script>
+    <script src="./app.js?v=bs-stat-pills-1" defer></script>
   </body>
 </html>
