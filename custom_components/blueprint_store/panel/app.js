@@ -1,3 +1,9 @@
+/* Blueprint Store panel JS
+ * - Robust sort control (new / likes / title) with request cancellation
+ * - Infinite scroll & search
+ * - Safe external opener & forum redirect
+ */
+
 const API = "/api/blueprint_store";
 const $ = (s) => document.querySelector(s);
 
@@ -34,10 +40,11 @@ async function fetchJSON(url, tries=3){
 /* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
 function openExternal(url){
   try{
-    const w = window.open("", "_blank");
+    const w = window.open("", "_blank");   // blank inherits our origin
     if (w) {
       try { w.opener = null; } catch {}
       const safe = String(url).replace(/"/g, "&quot;");
+      // lightweight fallback content
       w.document.write(`<!doctype html><meta charset="utf-8">
         <title>Opening…</title>
         <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
@@ -48,6 +55,7 @@ function openExternal(url){
       return true;
     }
   } catch {}
+  // ultimate fallback – same tab
   try { window.top.location.assign(url); } catch { location.assign(url); }
   return false;
 }
@@ -67,19 +75,15 @@ function viewDescButton(){
       View description
     </button>`;
 }
-
-/* stats pill (Likes + Comments) */
-function statsPill(likes, replies){
-  const l = Number(likes ?? 0);
-  const r = Number(replies ?? 0);
+function forumButtonRedirect(tid, slug){
+  const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
+  const href = `${API}/go?${qs}`;
   return `
-    <span class="myha-btn secondary" style="cursor:default" title="${l.toLocaleString()} likes • ${r.toLocaleString()} comments" aria-label="Post stats">
-      <sl-icon name="heart"></sl-icon>${l.toLocaleString()}
-      &nbsp;&nbsp;
-      <sl-icon name="chat-dots"></sl-icon>${r.toLocaleString()}
-    </span>`;
+    <a class="myha-btn secondary" data-open="${esc(href)}">
+      <sl-icon name="box-arrow-up-right"></sl-icon>
+      Forum post
+    </a>`;
 }
-
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
 /* tags renderer */
@@ -98,6 +102,7 @@ function rewriteToRedirect(href){
   try{
     const u = new URL(href);
     if (u.hostname !== "community.home-assistant.io") return null;
+    // Discourse topic URLs are /t/<slug>/<id> or /t/<id>
     const parts = u.pathname.split("/").filter(Boolean);
     const idx = parts.indexOf("t");
     if (idx === -1) return null;
@@ -146,49 +151,6 @@ function setPostHTML(container, html){
   container.appendChild(tmp);
 }
 
-/* ---------------- stats extraction (robust) ---------------- */
-function num(o, key){
-  if (!o || !(key in o)) return null;
-  const v = Number(o[key]);
-  return Number.isFinite(v) ? v : null;
-}
-function pickFirstNumber(obj, keys){
-  for (const k of keys){
-    const v = num(obj, k);
-    if (v != null) return v;
-  }
-  return null;
-}
-function getLikes(it){
-  // check common locations/keys
-  const pools = [it, it.topic, it.meta, it.discourse];
-  const keys  = ["likes","like_count","likeCount","reactions","reaction_count"];
-  for (const p of pools){
-    const v = pickFirstNumber(p, keys);
-    if (v != null) return v;
-  }
-  return 0;
-}
-function getReplies(it){
-  // prefer a direct reply_count; otherwise derive from posts_count - 1; try many aliases
-  const pools = [it, it.topic, it.meta, it.discourse, it.topic_details];
-  const directKeys = ["reply_count","replies","replyCount","comments","comment_count"];
-  for (const p of pools){
-    const v = pickFirstNumber(p, directKeys);
-    if (v != null) return Math.max(0, v);
-  }
-  // derivable forms
-  const postLikeKeys = ["posts_count","post_count","num_posts","posts","last_post_number"];
-  for (const p of pools){
-    const v = pickFirstNumber(p, postLikeKeys);
-    if (v != null){
-      // last_post_number and posts_count include the OP => subtract 1
-      return Math.max(0, v - 1);
-    }
-  }
-  return 0;
-}
-
 /* cache */
 const detailCache = new Map();
 
@@ -198,9 +160,6 @@ function renderCard(it){
   el.className = "card";
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
   const ctaIsView = (it.import_count || 0) > 1;
-
-  const likes   = getLikes(it);
-  const replies = getReplies(it);
 
   el.innerHTML = `
     <div class="row">
@@ -215,7 +174,7 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${statsPill(likes, replies)}
+      ${forumButtonRedirect(it.id, it.slug || "")}
       ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
@@ -253,7 +212,7 @@ function renderCard(it){
     }
   });
 
-  // Intercept open buttons on the card footer (import + any in-description pills)
+  // Intercept open buttons on the card footer
   el.addEventListener("click", (ev)=>{
     const opener = ev.target.closest("[data-open]");
     if (!opener) return;
@@ -294,6 +253,12 @@ function boot(){
   let loading = false;
   let hasMore = true;
   let sort = "new";
+  const VALID_SORT = new Set(["new", "likes", "title"]);
+  // token that invalidates in-flight loads (prevents stale appends)
+  let runToken = 0;
+  // initialize from control safely, if present
+  if (sortSel && VALID_SORT.has(sortSel.value)) sort = sortSel.value;
+
   let bucket = "";
 
   const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
@@ -327,10 +292,13 @@ function boot(){
   }
 
   async function load(initial=false){
+    const tokenAtStart = runToken;
     if (loading || (!hasMore && !initial)) return;
     loading = true; clearError();
     try{
       const data = await fetchPage(page);
+      // if a new run started while we were fetching, do nothing
+      if (tokenAtStart !== runToken) return;
       const items = data.items || [];
       hasMore = !!data.has_more;
       if (initial){
@@ -347,10 +315,14 @@ function boot(){
   }
 
   async function loadAllForSearch(){
+    // start a new run and invalidate any previous one
+    const myToken = ++runToken;
     page = 0; hasMore = true; list.innerHTML = ""; clearError();
     let first = true;
-    while (hasMore) {
-      await load(first); first = false;
+    while (hasMore && myToken === runToken) {
+      await load(first);
+      first = false;
+      // small yield for UI responsiveness
       await new Promise(r => setTimeout(r, 6));
     }
   }
@@ -360,9 +332,21 @@ function boot(){
     search.addEventListener("sl-input", onSearch);
     search.addEventListener("sl-clear", onSearch);
   }
-  if (sortSel){
-    sortSel.addEventListener("sl-change", async () => { sort = sortSel.value || "new"; await loadAllForSearch(); });
+
+  function setSortSafe(next){
+    if (!VALID_SORT.has(next)) next = "new";
+    if (sort === next) return false;                 // ignore no-op
+    sort = next;
+    if (sortSel && sortSel.value !== next) sortSel.value = next; // keep UI in sync
+    return true;
   }
+  if (sortSel){
+    sortSel.addEventListener("sl-change", async (ev) => {
+      const next = ev.target?.value || "new";
+      if (setSortSafe(next)) await loadAllForSearch();
+    }, { passive: true });
+  }
+
   if (refreshBtn){
     refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
   }
