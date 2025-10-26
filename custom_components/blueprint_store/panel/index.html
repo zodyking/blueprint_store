@@ -5,43 +5,34 @@
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      /* ===== Blueprint aesthetic (matches your logo) ===== */
+      /* Blueprint logo aesthetic */
       :root{
-        --bg1:#0d3b8e; --bg2:#0a5bd8;  /* deep → vibrant blue gradient */
-        --grid:#ffffff14;              /* faint grid lines */
+        --bg1:#0d3b8e; --bg2:#0a5bd8;
+        --grid:#ffffff14;
         --card:#0f1630; --card2:#11214f;
         --text:#e6f0ff; --muted:#b9c7e6;
         --accent:#5ab5ff; --accent2:#9dd1ff;
-        --radius:18px; --pad:18px;
-        --shadow: 0 10px 30px rgba(0,0,0,.4);
-        --maxw: 980px;
+        --radius:18px; --pad:18px; --maxw:980px;
+        --shadow:0 10px 30px rgba(0,0,0,.4);
       }
-      @media (prefers-color-scheme: light) {
+      @media (prefers-color-scheme: light){
         :root{ --card:#ffffff; --card2:#f5f8ff; --text:#0b1b3a; --muted:#3b5a8f; --shadow:0 8px 24px rgba(25,60,140,.2);}
       }
-
       *{box-sizing:border-box}
       body{
         margin:0; color:var(--text); font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Ubuntu;
-        background:
-          linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 100%),
-          #0b1e46;
+        background: linear-gradient(180deg, var(--bg2) 0%, var(--bg1) 100%);
         min-height:100vh;
       }
-      /* grid overlay (blueprint feel) */
       body::before{
-        content:"";
-        position:fixed; inset:0; pointer-events:none; z-index:0;
+        content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
         background-image:
           linear-gradient(to right, var(--grid) 1px, transparent 1px),
           linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
-        background-size: 24px 24px, 24px 24px;
+        background-size: 24px 24px;
       }
-
-      /* ===== Header / sticky nav ===== */
       header{
-        position:sticky; top:0; z-index:5;
-        padding:10px 12px;
+        position:sticky; top:0; z-index:5; padding:10px 12px;
         backdrop-filter: blur(10px);
         background: linear-gradient(180deg, rgba(8,24,70,.85), rgba(8,24,70,.6));
         border-bottom: 1px solid #ffffff1f;
@@ -53,17 +44,12 @@
         background: linear-gradient(180deg, #0c2e6e, #0b2252);
         border:1px solid #ffffff1f; border-radius:999px; padding:10px 14px; box-shadow:var(--shadow);
       }
-      .pill input{
-        width:100%; font-size:16px; background:transparent; border:0; outline:0; color:var(--text);
-      }
-      .btn{
-        border:1px solid #ffffff2a; color:#0c2150; background:linear-gradient(135deg, var(--accent), var(--accent2));
-        border-radius:12px; padding:10px 14px; cursor:pointer; font-weight:600; box-shadow:var(--shadow);
-      }
+      .pill input{ width:100%; font-size:16px; background:transparent; border:0; outline:0; color:var(--text); }
+      .btn{ border:1px solid #ffffff2a; color:#0c2150; background:linear-gradient(135deg, var(--accent), var(--accent2));
+            border-radius:12px; padding:10px 14px; cursor:pointer; font-weight:600; box-shadow:var(--shadow); }
 
       main{ max-width:var(--maxw); margin:18px auto; padding:0 12px; position:relative; z-index:1; }
 
-      /* ===== List: single card per row ===== */
       .card{
         background: linear-gradient(180deg, var(--card2), var(--card));
         border:1px solid #ffffff22; border-radius:var(--radius); box-shadow:var(--shadow);
@@ -79,8 +65,6 @@
       .import:active{ transform:translateY(1px); }
 
       .empty,.error{ text-align:center; color:#cbd8ff; padding:24px; }
-
-      /* Sentinel spacer for infinite scroll */
       #sentinel{ height:60px; }
     </style>
   </head>
