@@ -5,20 +5,17 @@
     <title>Blueprint Store</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <!-- Shoelace -->
-    <script
-      type="module"
-      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
-    </script>
+    <!-- Shoelace (for inputs/dropdowns already used by the panel) -->
+    <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
 
     <style>
       :root{
         --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.85));
+        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.86));
         --card-bd: rgba(170,200,255,.22);
         --card-bd-hover:#9dd1ff66;
         --shadow: 0 18px 50px rgba(6,16,50,.45);
-        --maxw: 1200px;
+        --maxw: 1180px;
 
         --sl-input-background-color: transparent;
         --sl-input-border-color: rgba(255,255,255,.32);
@@ -30,20 +27,23 @@
       body{
         margin:0; color:var(--ink);
         font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
-        /* Blueprint base → fade to black */
-        background:
-          radial-gradient(1200px 800px at 50% -10%, rgba(120,180,255,.18), transparent 70%),
-          linear-gradient(180deg, var(--blue-1) 0%, var(--blue-2) 40%, #07122f 72%, #04070f 100%);
         min-height:100vh;
+        background: #0a4fb9;
       }
-      /* grid lines kept bright and constant */
+      /* grid lines stay constant */
       body::after{
-        content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
+        content:""; position:fixed; inset:0; z-index:-2; pointer-events:none;
         background-image:
           linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
           linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
         background-size: 28px 28px;
-        mix-blend-mode: screen;
+        opacity:.35;
+      }
+      /* fade to black overlay (lines above still visible) */
+      body::before{
+        content:""; position:fixed; inset:0; z-index:-3;
+        background:
+          linear-gradient(180deg, #0b56c9 0%, #0a3fa5 30%, #092b79 60%, #071a47 80%, #050914 100%);
       }
 
       header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
@@ -57,93 +57,109 @@
       sl-input::part(base){ background:transparent; }
       sl-input::part(input){ color:#fff; }
       sl-input::part(form-control-label){ color:#fff; }
-      sl-select::part(combobox){ color:#fff; }
+
       sl-button.plain::part(base){
         background:transparent; color:#fff; border:none; box-shadow:none; padding-inline:10px;
       }
       sl-button.plain::part(base):hover{ text-decoration: underline; }
-      /* remove outlines on Tag + Refresh buttons */
-      #tagbtn::part(base), #refresh::part(base){ border:none; box-shadow:none; }
 
-      main{ max-width:var(--maxw); margin:12px auto 60px; padding:0 12px; }
+      main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
 
       .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
       .banner img{ width:100%; display:block; }
 
-      .cards-wrap{ position:relative; }
-      .cards-wrap::before{
-        content:""; position:absolute; inset:-34px -18px -34px -18px; z-index:-1;
-        background: radial-gradient(60% 55% at 50% 8%, rgba(155,205,255,.18), transparent 60%),
-                    radial-gradient(60% 60% at 50% 100%, rgba(40,140,255,.18), transparent 65%);
-        filter: blur(18px);
-      }
+      .section-title{ margin:18px 0 10px; font-size:22px; font-weight:900; letter-spacing:.2px; }
 
-      .section-title{ margin:18px 0 8px; font-size:20px; font-weight:900; letter-spacing:.2px; }
-
+      /* cards */
       .card{
         border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
         box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
-        position:relative;
       }
       .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
       .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
       .card h3{ margin:0; font-size:18px; font-weight:900; }
       .author{ opacity:.92; font-weight:700; }
+      .desc-wrap{
+        margin-top:8px;
+        border-radius:14px;
+        border:1px solid rgba(255,255,255,.12);
+        background: linear-gradient(180deg, rgba(5,12,35,.72), rgba(6,14,38,.90));
+        padding:12px 14px;
+        line-height:1.55;
+        color:#e4ecff;
+      }
+      .desc-wrap.expanded { padding-bottom:16px; }
+      .desc-wrap a{ color:#aee1ff; }
+
       .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
       .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
 
-      /* SINGLE growable description area (teaser + full) with dark bg */
-      .desc-wrap{
-        background: rgba(5,12,36,.78);
-        border:1px solid rgba(180,210,255,.18);
-        border-radius:14px;
-        padding:10px 12px;
-        position:relative;
+      .card__footer{ display:flex; justify-content:space-between; align-items:center; margin-top:12px; }
+      .like-pill{
+        display:inline-flex; align-items:center; gap:8px;
+        padding:10px 14px; border-radius:999px;
+        border:1px solid rgba(255,255,255,.35);
+        background:linear-gradient(180deg,#0f2561,#112d72);
+        color:#eaf4ff; font-weight:800;
       }
-      .desc-teaser{
-        color:#dce8ff; line-height:1.55;
-        max-height:96px; overflow:hidden;
-        -webkit-mask-image: linear-gradient(#000 70%, transparent 100%);
-                mask-image: linear-gradient(#000 70%, transparent 100%);
+      .like-pill .heart{
+        width:18px; height:18px; display:inline-block;
+        background-color:#eaf4ff; -webkit-mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24"><path d="M12 21s-6.716-4.588-9.164-7.036C1.102 12.23 1 10.4 1.879 9.121 2.757 7.84 4.33 7.26 5.7 7.714c.872.288 1.63.95 2.03 1.77.4-.82 1.158-1.482 2.03-1.77 1.37-.454 2.943.126 3.821 1.407.879 1.279.777 3.109-.957 4.843C18.716 16.412 12 21 12 21z"/></svg>') center/contain no-repeat;
+                mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" fill="white" viewBox="0 0 24 24"><path d="M12 21s-6.716-4.588-9.164-7.036C1.102 12.23 1 10.4 1.879 9.121 2.757 7.84 4.33 7.26 5.7 7.714c.872.288 1.63.95 2.03 1.77.4-.82 1.158-1.482 2.03-1.77 1.37-.454 2.943.126 3.821 1.407.879 1.279.777 3.109-.957 4.843C18.716 16.412 12 21 12 21z"/></svg>') center/contain no-repeat;
       }
-      .desc-wrap.expanded .desc-teaser{ display:none; }
-      .desc-full{ display:none; color:#dce8ff; line-height:1.55; }
-      .desc-wrap.expanded .desc-full{ display:block; }
-      .desc-full a{ color:#aee1ff; }
-      .desc-full pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
 
       .toggle{ color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; margin-top:8px; }
-      .likes-pill{
-        position:absolute; left:12px; bottom:12px;
-        display:inline-flex; align-items:center; gap:8px;
-        padding:8px 12px; border-radius:999px;
-        background: rgba(9,22,58,.6); border:1px solid rgba(255,255,255,.24);
-        font-weight:800; color:#eef6ff;
-      }
-      .likes-pill .icon{ width:18px; height:18px; display:inline-block;
-        mask:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="white" d="M12.1 21.35l-1.1-1.02C5.14 15.24 2 12.39 2 8.96 2 6.36 4.01 4.35 6.6 4.35c1.54 0 3.04.73 3.97 1.87A5.2 5.2 0 0 1 14.54 4.35c2.6 0 4.61 2.01 4.61 4.6 0 3.43-3.14 6.28-8.9 11.37l-1.15 1.03Z"/></svg>') center/contain no-repeat;
-        background:#fff;
-      }
-
-      /* Recognition (“Hall of Builders”) */
-      .contrib{ margin:18px 0; padding:16px; border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg); box-shadow: var(--shadow); }
-      .contrib-head{ text-align:center; }
-      .contrib-head h2{ margin:0 0 6px; font-size:20px; font-weight:900; }
-      .contrib-head p{ margin:0 0 12px; color:#d1defa; }
-      .contrib-grid{
-        display:grid; grid-template-columns: repeat(3,1fr); gap:12px;
-      }
-      @media (max-width: 980px){ .contrib-grid{ grid-template-columns: 1fr; } }
-      .contrib-card{
-        border:1px solid rgba(170,200,255,.2); background:linear-gradient(180deg, rgba(8,20,52,.8), rgba(6,16,44,.88));
-        border-radius:14px; padding:14px; min-height:120px; display:flex; flex-direction:column; justify-content:flex-start;
-      }
-      .contrib-title{ font-weight:900; font-size:14px; margin-bottom:6px; }
-      .contrib-author{ font-weight:900; margin-bottom:4px; }
-      .contrib-sub{ color:#d7e5ff; }
+      .toggle:hover{ text-decoration:underline; }
 
       #error, #empty{ text-align:center; color:#e7eefc; }
       #sentinel{ height:60px; }
+
+      /* Recognition (Community Recognition) */
+      .contrib{
+        margin: 18px 0 22px;
+        padding: 16px;
+        border-radius: 18px;
+        border: 1px solid var(--card-bd);
+        background: var(--card-bg);
+        box-shadow: var(--shadow);
+      }
+      .contrib-head{
+        text-align:center; margin-bottom:12px;
+      }
+      .contrib-head h2{
+        margin:0; font-size:22px; font-weight:900;
+      }
+      .contrib-head p{ margin:6px 0 0; color:var(--muted); }
+      .contrib-grid{
+        margin-top:12px;
+        display:grid; gap:12px;
+        grid-template-columns: repeat(3, 1fr);
+      }
+      @media (max-width: 980px){
+        .contrib-grid{ grid-template-columns: 1fr; }
+      }
+      .contrib-card{
+        border:1px solid var(--card-bd);
+        border-radius:14px; padding:16px;
+        background:linear-gradient(180deg, rgba(10,20,52,.86), rgba(8,18,46,.92));
+        display:flex; flex-direction:column; justify-content:flex-start;
+        min-height:120px;
+      }
+      .contrib-title{
+        margin:0 0 8px 0; font-weight:800; font-size:16px;
+        text-align:center;
+      }
+      .contrib-author{
+        font-weight:800; text-align:center; margin-bottom:6px;
+      }
+      .contrib-body{
+        color:#cfe2ff; text-align:center;
+      }
+      .pill-compact{
+        display:inline-flex; align-items:center; gap:8px; padding:8px 12px;
+        border-radius:999px; background:#1b2b66; border:1px solid #4b79d8;
+        color:#eaf4ff; font-weight:700;
+      }
     </style>
   </head>
   <body>
@@ -160,8 +176,8 @@
 
         <sl-select id="sort" value="new" hoist>
           <sl-option value="new">Newest</sl-option>
-          <sl-option value="likes">Most liked</sl-option>
           <sl-option value="title">Title A–Z</sl-option>
+          <sl-option value="likes">Most liked</sl-option>
         </sl-select>
 
         <sl-dropdown id="tagdd" hoist>
@@ -176,24 +192,10 @@
     <main>
       <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-      <!-- Hall of Builders -->
-      <section id="contrib" class="contrib" style="display:none;">
+      <!-- Community Recognition -->
+      <section id="recognition" class="contrib" style="display:none">
         <div class="contrib-head">
-          <h2 id="contrib-title">Hall of Builders</h2>
-          <p id="contrib-sub">Shout-outs to creators pushing the community forward.</p>
+          <h2 id="rec-title">Community Recognition</h2>
+          <p id="rec-sub">Shout-outs to creators moving the community forward.</p>
         </div>
-        <div class="contrib-grid" id="contrib-grid"></div>
-      </section>
-
-      <div class="section-title" id="heading">All blueprints</div>
-      <div id="list" class="cards-wrap"></div>
-
-      <p id="empty" style="display:none">No blueprints matched.</p>
-      <p id="error" style="display:none"></p>
-      <div id="sentinel"></div>
-    </main>
-
-    <!-- cache-busted -->
-    <script src="./app.js?v=bs-grow-desc-2" defer></script>
-  </body>
-</html>
+        <div
