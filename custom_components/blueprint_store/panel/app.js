@@ -9,15 +9,6 @@ const search = $("#search");
 const sortSel = $("#sort");
 const refreshBtn = $("#refresh");
 const sentinel = $("#sentinel");
-const activeChips = $("#active-chips");
-
-/* Drawer */
-const drawer = $("#filters-drawer");
-const openFiltersBtn = $("#open-filters");
-const tagSearch = $("#tag-search");
-const tagsGrid = $("#tags-grid");
-const applyBtn = $("#apply-filters");
-const clearBtn = $("#clear-filters");
 
 /* State */
 let page = 0;
@@ -25,9 +16,6 @@ let qTitle = "";
 let loading = false;
 let hasMore = true;
 let sort = "new";
-let allBuckets = [];
-let activeBucket = null;     // one category at a time (clean UI)
-let stagedBucket = null;
 
 /* Utils */
 function esc(s){ return (s||"").replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c])); }
@@ -36,7 +24,7 @@ function setError(msg){ errorB.textContent = msg; errorB.style.display = "block"
 function clearError(){ errorB.style.display = "none"; errorB.textContent = ""; }
 function openExternal(url){ try { window.top?.open(url, "_blank", "noopener"); } catch { window.open(url, "_blank"); } }
 
-/* My Home Assistant–style import button */
+/* My Home Assistant–style button */
 function importButton(href){
   return `
     <a class="myha-btn" href="${href}" target="_blank" rel="noopener">
@@ -45,33 +33,55 @@ function importButton(href){
     </a>`;
 }
 
+/* Secondary pill button for forum */
+function forumButton(href){
+  return `
+    <a class="myha-btn secondary" href="${href}" target="_blank" rel="noopener">
+      <sl-icon name="box-arrow-up-right"></sl-icon>
+      Forum post
+    </a>`;
+}
+
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
-function tagPills(tags){ if (!tags?.length) return ""; return `<div class="tags">${tags.slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`; }
+
+/* Prevent blank tag chips: filter empties/dupes and trim, cap length */
+function tagPills(tags){
+  const set = [];
+  (tags || []).forEach(t => {
+    const v = (t || "").toString().trim();
+    if (v && !set.includes(v)) set.push(v);
+  });
+  if (!set.length) return "";
+  return `<div class="tags">${set.slice(0,4).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+}
 
 /* Read-more helpers */
 function setPostHTML(container, html){
   container.innerHTML = html || "<em>Nothing to show.</em>";
-  // ensure links open outside HA iframe
   container.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
 }
 
 function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
+
+  // compose visible tags: bucket + a couple of post tags
+  const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
+
   el.innerHTML = `
     <div class="row">
       <h3>${esc(it.title)}</h3>
       ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
       ${usesBadge(it.uses)}
     </div>
-    ${tagPills([it.bucket, ...(it.tags||[]).slice(0,3)])}
+    ${tagPills(visibleTags)}
     <p class="desc">${esc(it.excerpt || "")}</p>
 
     <div class="toggle" data-id="${it.id}">Read more</div>
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      <sl-button size="small" variant="default" pill class="forum">Forum post</sl-button>
+      ${forumButton(it.topic_url)}
       ${importButton(it.import_url)}
     </div>
   `;
@@ -91,11 +101,6 @@ function renderCard(it){
     toggle.textContent = expanded ? "Less" : "Read more";
   });
 
-  // Forum
-  el.querySelector(".forum").addEventListener("click", (e) => {
-    e.preventDefault(); openExternal(it.topic_url);
-  });
-
   return el;
 }
 
@@ -113,7 +118,6 @@ async function fetchPage(p){
   const url = new URL(`${API}/blueprints`, location.origin);
   url.searchParams.set("page", String(p));
   if (qTitle) url.searchParams.set("q_title", qTitle);
-  if (activeBucket) url.searchParams.set("bucket", activeBucket);
   if (sort) url.searchParams.set("sort", sort);
   return await fetchJSON(url.toString());
 }
@@ -144,77 +148,19 @@ async function loadAllForSearch(){
   }
 }
 
-/* ------- Active chip ------- */
-function renderActiveChips(){
-  activeChips.innerHTML = "";
-  if (!activeBucket) return;
-  const chip = document.createElement("md-filter-chip");
-  chip.setAttribute("selected", "");
-  chip.textContent = activeBucket;
-  chip.addEventListener("click", async () => {
-    activeBucket = null; renderActiveChips(); await loadAllForSearch();
-  });
-  activeChips.appendChild(chip);
-}
-
-/* ------- Drawer / buckets UI ------- */
-function buildBucketsUI(filterText=""){
-  tagsGrid.innerHTML = "";
-  const ft = (filterText || "").toLowerCase();
-  const toShow = allBuckets.filter(t => !ft || t.toLowerCase().includes(ft));
-  toShow.forEach(tag => {
-    const btn = document.createElement("sl-button");
-    btn.className = "tag-btn" + (stagedBucket === tag ? " selected" : "");
-    btn.variant = "default";
-    btn.pill = true;
-    btn.textContent = tag;
-    btn.addEventListener("click", () => {
-      stagedBucket = (stagedBucket === tag) ? null : tag;
-      buildBucketsUI(tagSearch.value);
-    });
-    tagsGrid.appendChild(btn);
-  });
-}
-
-openFiltersBtn.addEventListener("click", async () => {
-  stagedBucket = activeBucket;
-  tagSearch.value = "";
-  buildBucketsUI();
-  drawer.show();
-});
-tagSearch.addEventListener("sl-input", () => buildBucketsUI(tagSearch.value));
-tagSearch.addEventListener("sl-clear", () => buildBucketsUI(""));
-
-applyBtn.addEventListener("click", async () => {
-  activeBucket = stagedBucket;
-  renderActiveChips();
-  drawer.hide();
-  await loadAllForSearch();
-});
-clearBtn.addEventListener("click", () => { stagedBucket = null; buildBucketsUI(tagSearch.value); });
-
-/* ------- Filters list ------- */
-async function loadFilters(){
-  try{
-    const data = await fetchJSON(`${API}/filters`);
-    allBuckets = data.tags || [];
-  }catch(e){ /* not fatal */ }
-}
-
-/* ------- Handlers: search/sort/refresh ------- */
+/* Handlers */
 const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); await loadAllForSearch(); }, 280);
 search.addEventListener("sl-input", onSearch);
 search.addEventListener("sl-clear", onSearch);
+
 sortSel.addEventListener("sl-change", async () => { sort = sortSel.value || "new"; await loadAllForSearch(); });
 refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
 
-/* ------- Infinite scroll ------- */
+/* Infinite scroll */
 const io = new IntersectionObserver((entries)=>{
   if (entries[0] && entries[0].isIntersecting) load(false);
 },{ rootMargin:"700px" });
 io.observe(sentinel);
 
-/* ------- Kickoff ------- */
-await loadFilters();
-renderActiveChips();
+/* Kickoff */
 await load(true);
