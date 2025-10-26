@@ -1,3 +1,4 @@
+// app.js
 const API = "/api/blueprint_store";
 const $ = (s) => document.querySelector(s);
 
@@ -38,6 +39,7 @@ function openExternal(url){
     if (w) {
       try { w.opener = null; } catch {}
       const safe = String(url).replace(/"/g, "&quot;");
+      // lightweight fallback content
       w.document.write(`<!doctype html><meta charset="utf-8">
         <title>Opening…</title>
         <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
@@ -68,19 +70,15 @@ function viewDescButton(){
       View description
     </button>`;
 }
-
-/* NEW: stats pill (replaces old forum button) */
-function statsPill(likes, replies){
-  const l = Number(likes ?? 0);
-  const r = Number(replies ?? 0);
+function forumButtonRedirect(tid, slug){
+  const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
+  const href = `${API}/go?${qs}`;
   return `
-    <span class="myha-btn secondary" style="cursor:default" title="${l.toLocaleString()} likes • ${r.toLocaleString()} comments" aria-label="Post stats">
-      <sl-icon name="heart"></sl-icon>${l.toLocaleString()}
-      &nbsp;&nbsp;
-      <sl-icon name="chat-dots"></sl-icon>${r.toLocaleString()}
-    </span>`;
+    <a class="myha-btn secondary" data-open="${esc(href)}">
+      <sl-icon name="box-arrow-up-right"></sl-icon>
+      Forum post
+    </a>`;
 }
-
 function usesBadge(n){ return n==null ? "" : `<span class="uses">${n.toLocaleString()} uses</span>`; }
 
 /* tags renderer */
@@ -99,6 +97,7 @@ function rewriteToRedirect(href){
   try{
     const u = new URL(href);
     if (u.hostname !== "community.home-assistant.io") return null;
+    // Discourse topic URLs are /t/<slug>/<id> or /t/<id>
     const parts = u.pathname.split("/").filter(Boolean);
     const idx = parts.indexOf("t");
     if (idx === -1) return null;
@@ -131,210 +130,4 @@ function setPostHTML(container, html){
 
   // Rewrite forum-topic links to same-origin redirect + add data-open
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
-    const redir = rewriteToRedirect(a.getAttribute("href"));
-    if (redir) a.setAttribute("data-open", redir);
-  });
-
-  // intercept clicks on any data-open inside description
-  tmp.addEventListener("click", (ev)=>{
-    const a = ev.target.closest("[data-open]");
-    if (!a) return;
-    ev.preventDefault();
-    openExternal(a.getAttribute("data-open"));
-  });
-
-  container.innerHTML = "";
-  container.appendChild(tmp);
-}
-
-/* cache */
-const detailCache = new Map();
-
-/* card */
-function renderCard(it){
-  const el = document.createElement("article");
-  el.className = "card";
-  const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
-  const ctaIsView = (it.import_count || 0) > 1;
-
-  // derive stats with fallbacks
-  const likes   = it.likes ?? it.like_count ?? 0;
-  const replies = it.replies ?? it.comments ?? ((it.posts_count || 1) - 1);
-
-  el.innerHTML = `
-    <div class="row">
-      <h3>${esc(it.title)}</h3>
-      ${it.author ? `<span class="author">by ${esc(it.author)}</span>` : ""}
-      ${usesBadge(it.uses)}
-    </div>
-    ${tagPills(visibleTags)}
-    <p class="desc">${esc(it.excerpt || "")}</p>
-
-    <div class="toggle" data-id="${it.id}">Read more</div>
-    <div class="more" id="more-${it.id}"></div>
-
-    <div class="card__footer">
-      ${statsPill(likes, replies)}
-      ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
-    </div>
-  `;
-
-  // Read more / less
-  const toggle = el.querySelector(".toggle");
-  const more = el.querySelector(`#more-${it.id}`);
-  let expanded = false;
-  async function expandNow(){
-    if (!expanded) {
-      expanded = true;
-      toggle.style.pointerEvents = "none";
-      try{
-        if (!detailCache.has(it.id)) {
-          const data = await fetchJSON(`${API}/topic?id=${it.id}`);
-          detailCache.set(it.id, data.cooked || "");
-        }
-        setPostHTML(more, detailCache.get(it.id));
-      }catch(e){
-        setPostHTML(more, `<em>Failed to load post: ${esc(String(e.message||e))}</em>`);
-      }finally{
-        toggle.style.pointerEvents = "";
-      }
-      more.style.display = "block";
-      toggle.textContent = "Less";
-    }
-  }
-  toggle.addEventListener("click", async () => {
-    if (expanded) {
-      expanded = false;
-      more.style.display = "none";
-      toggle.textContent = "Read more";
-    } else {
-      await expandNow();
-    }
-  });
-
-  // Intercept open buttons on the card footer (import + any in-description pills)
-  el.addEventListener("click", (ev)=>{
-    const opener = ev.target.closest("[data-open]");
-    if (!opener) return;
-    ev.preventDefault();
-    openExternal(opener.getAttribute("data-open"));
-  });
-
-  const viewBtn = el.querySelector('button[data-viewdesc="1"]');
-  if (viewBtn){
-    viewBtn.addEventListener("click", async (ev)=>{ ev.preventDefault(); await expandNow(); });
-  }
-
-  return el;
-}
-
-function appendItems(target, items){
-  for (const it of items) target.appendChild(renderCard(it));
-}
-
-/* boot */
-function boot(){
-  const list   = $("#list");
-  const empty  = $("#empty");
-  const errorB = $("#error");
-  const search = $("#search");
-  const sortSel = $("#sort");
-  const refreshBtn = $("#refresh");
-  const sentinel = $("#sentinel");
-
-  const tagdd = $("#tagdd");
-  const tagbtn = $("#tagbtn");
-  const tagmenu = $("#tagmenu");
-
-  if (!list) return;
-
-  let page = 0;
-  let qTitle = "";
-  let loading = false;
-  let hasMore = true;
-  let sort = "new";
-  let bucket = "";
-
-  const setError = (msg)=>{ if(errorB){ errorB.textContent = msg; errorB.style.display="block"; } };
-  const clearError = ()=>{ if(errorB){ errorB.style.display="none"; errorB.textContent=""; } };
-
-  async function fetchFilters(){
-    try{
-      const data = await fetchJSON(`${API}/filters`);
-      const tags = Array.isArray(data.tags) ? data.tags : [];
-      tagmenu.innerHTML = "";
-      const mk = (value,label)=>`<sl-menu-item value="${esc(value)}">${esc(label)}</sl-menu-item>`;
-      tagmenu.insertAdjacentHTML("beforeend", mk("", "All tags"));
-      tags.forEach(t => tagmenu.insertAdjacentHTML("beforeend", mk(t, t)));
-      tagmenu.addEventListener("sl-select", async (ev)=>{
-        const val = ev.detail.item.value || "";
-        bucket = val;
-        tagbtn.textContent = bucket || "All tags";
-        await loadAllForSearch();
-        if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
-      });
-    }catch(e){ /* optional */ }
-  }
-
-  async function fetchPage(p){
-    const url = new URL(`${API}/blueprints`, location.origin);
-    url.searchParams.set("page", String(p));
-    if (qTitle) url.searchParams.set("q_title", qTitle);
-    if (sort) url.searchParams.set("sort", sort);
-    if (bucket) url.searchParams.set("bucket", bucket);
-    return await fetchJSON(url.toString());
-  }
-
-  async function load(initial=false){
-    if (loading || (!hasMore && !initial)) return;
-    loading = true; clearError();
-    try{
-      const data = await fetchPage(page);
-      const items = data.items || [];
-      hasMore = !!data.has_more;
-      if (initial){
-        list.innerHTML = "";
-        if (empty) empty.style.display = items.length ? "none" : "block";
-      }
-      appendItems(list, items);
-      page += 1;
-    }catch(e){
-      setError(`Failed to load: ${String(e.message||e)}`);
-    }finally{
-      loading = false;
-    }
-  }
-
-  async function loadAllForSearch(){
-    page = 0; hasMore = true; list.innerHTML = ""; clearError();
-    let first = true;
-    while (hasMore) {
-      await load(first); first = false;
-      await new Promise(r => setTimeout(r, 6));
-    }
-  }
-
-  if (search){
-    const onSearch = debounce(async () => { qTitle = (search.value || "").trim(); await loadAllForSearch(); }, 280);
-    search.addEventListener("sl-input", onSearch);
-    search.addEventListener("sl-clear", onSearch);
-  }
-  if (sortSel){
-    sortSel.addEventListener("sl-change", async () => { sort = sortSel.value || "new"; await loadAllForSearch(); });
-  }
-  if (refreshBtn){
-    refreshBtn.addEventListener("click", async () => { await loadAllForSearch(); });
-  }
-
-  if (sentinel){
-    const io = new IntersectionObserver((entries)=>{
-      if (entries[0] && entries[0].isIntersecting) load(false);
-    },{ rootMargin:"700px" });
-    io.observe(sentinel);
-  }
-
-  fetchFilters();
-  load(true);
-}
-
-document.addEventListener("DOMContentLoaded", boot);
+    const redir = rewriteToR
