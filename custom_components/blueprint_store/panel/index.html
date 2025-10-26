@@ -29,7 +29,7 @@
     body{
       margin:0; color:var(--ink);
       font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
-      background: var(--blue); /* solid blueprint blue (no gradient) */
+      background: var(--blue);   /* solid blueprint blue (no gradient) */
       min-height:100vh;
       position:relative;
     }
@@ -61,12 +61,20 @@
     .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
     .banner img{ width:100%; display:block; }
 
-    .cards-wrap{ position:relative; }
-    /* remove halo/gradients behind list */
-    .cards-wrap::before{ content:none; }
-
     .section-title{ margin:10px 0 10px; font-size:20px; font-weight:900; letter-spacing:.2px; }
 
+    /* Creators Spotlight */
+    .contrib{ margin:18px 0 22px; padding:16px; border-radius:16px; border:1px solid var(--card-bd); background:var(--card-bg); box-shadow:var(--shadow); }
+    .contrib-head{ margin:0 0 8px; color:#aee1ff; font-size:20px; font-weight:900; text-align:center; }
+    .contrib-sub{ margin:0 0 12px; opacity:.8; text-align:center; }
+    .contrib-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+    @media (max-width: 980px){ .contrib-grid{ grid-template-columns: 1fr; } }
+    .contrib-card{ border:1px solid var(--card-bd); background: var(--card-bg); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:flex-start; align-items:center; min-height:120px; text-align:center; }
+    .contrib-card h4{ margin:0 0 6px; font-weight:900; }
+    .contrib-title{ font-weight:800; margin:8px 0 0; }
+    .contrib-chip{ background:#0b1c48; border:1px solid #184a88; padding:6px 9px; border-radius:999px; font-weight:700; margin-top:8px; }
+
+    /* cards */
     .card{
       border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
       box-shadow: var(--shadow); padding:16px; margin:14px 0; overflow:visible; position:relative;
@@ -91,17 +99,6 @@
     .card__footer{ display:flex; justify-content:flex-end; align-items:center; margin-top:44px; gap:10px; }
     .import-btn{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:999px; font-weight:800; color:#032149; text-decoration:none; background: linear-gradient(135deg, #00b2ff, #0a84ff); box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6; border: 1px solid rgba(255,255,255,.35); }
     .neutral-btn{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border-radius:999px; font-weight:800; color:#f6f8ff; text-decoration:none; background: linear-gradient(135deg, #6d7a92, #4e5a74); border:1px solid rgba(255,255,255,.30); }
-
-    /* Creators Spotlight */
-    .contrib{ margin:18px 0 22px; padding:16px; border-radius:16px; border:1px solid var(--card-bd); background:var(--card-bg); box-shadow:var(--shadow); }
-    .contrib-head{ margin:0 0 10px; color:#aee1ff; font-size:20px; font-weight:900; text-align:center; }
-    .contrib-sub{ margin:0 0 12px; opacity:.8; text-align:center; }
-    .contrib-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
-    @media (max-width: 980px){ .contrib-grid{ grid-template-columns: 1fr; } }
-    .contrib-card{ border:1px solid var(--card-bd); background: var(--card-bg); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:flex-start; align-items:center; min-height:120px; text-align:center; }
-    .contrib-card h4{ margin:0 0 6px; font-weight:900; }
-    .contrib-title{ font-weight:800; margin:8px 0 0; }
-    .contrib-chip{ background:#0b1c48; border:1px solid #184a88; padding:6px 9px; border-radius:999px; font-weight:700; margin-top:8px; }
 
     #error,#empty{ text-align:center; color:#e7eefc; }
     #sentinel{ height:60px; }
@@ -137,6 +134,7 @@
   <main>
     <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
+    <!-- Creators Spotlight (restored) -->
     <section id="contrib" class="contrib" style="display:none">
       <h3 class="contrib-head">Creators Spotlight</h3>
       <p class="contrib-sub">Shout-outs to makers moving the community forward.</p>
@@ -151,7 +149,6 @@
     <div id="sentinel"></div>
   </main>
 
-  <!-- cache-busted -->
-  <script src="./app.js?v=spotlight-restore-2" defer></script>
+  <script src="./app.js?v=spotlight-restore-3" defer></script>
 </body>
 </html>
