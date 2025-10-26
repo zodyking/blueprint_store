@@ -16,6 +16,7 @@ async function fetchJSONRaw(url){
   if (data && data.error) throw new Error(data.error);
   return data;
 }
+// retry/backoff for 429
 async function fetchJSON(url, tries=3){
   let delay = 600;
   for(let i=0;i<tries;i++){
@@ -39,6 +40,13 @@ function importButton(href){
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
+}
+function viewDescButton(){  // gray CTA that toggles description
+  return `
+    <button class="myha-btn neutral" data-viewdesc="1" type="button">
+      <sl-icon name="document-text"></sl-icon>
+      View description
+    </button>`;
 }
 function forumButton(href){
   return `
@@ -92,6 +100,7 @@ function renderCard(it){
   const el = document.createElement("article");
   el.className = "card";
   const visibleTags = [it.bucket, ...(it.tags || []).slice(0,3)];
+  const ctaIsView = (it.import_count || 0) > 1;
 
   el.innerHTML = `
     <div class="row">
@@ -106,8 +115,8 @@ function renderCard(it){
     <div class="more" id="more-${it.id}"></div>
 
     <div class="card__footer">
-      ${forumButton(it.topic_url)}   <!-- backend now sends slugged URL -->
-      ${importButton(it.import_url)}
+      ${forumButton(it.topic_url)}   <!-- backend sends slugged URL -->
+      ${ctaIsView ? viewDescButton() : importButton(it.import_url)}
     </div>
   `;
 
@@ -115,9 +124,9 @@ function renderCard(it){
   const toggle = el.querySelector(".toggle");
   const more = el.querySelector(`#more-${it.id}`);
   let expanded = false;
-  toggle.addEventListener("click", async () => {
-    expanded = !expanded;
-    if (expanded) {
+  async function expandNow(){
+    if (!expanded) {
+      expanded = true;
       toggle.style.pointerEvents = "none";
       try{
         if (!detailCache.has(it.id)) {
@@ -130,10 +139,25 @@ function renderCard(it){
       }finally{
         toggle.style.pointerEvents = "";
       }
+      more.style.display = "block";
+      toggle.textContent = "Less";
     }
-    more.style.display = expanded ? "block" : "none";
-    toggle.textContent = expanded ? "Less" : "Read more";
+  }
+  toggle.addEventListener("click", async () => {
+    if (expanded) {
+      expanded = false;
+      more.style.display = "none";
+      toggle.textContent = "Read more";
+    } else {
+      await expandNow();
+    }
   });
+
+  // If CTA is "View description" wire it to expand
+  const viewBtn = el.querySelector('button[data-viewdesc="1"]');
+  if (viewBtn){
+    viewBtn.addEventListener("click", async (ev)=>{ ev.preventDefault(); await expandNow(); });
+  }
 
   return el;
 }
@@ -183,7 +207,6 @@ function boot(){
         bucket = val;
         tagbtn.textContent = bucket || "All tags";
         await loadAllForSearch();
-        // close dropdown
         if (tagdd && typeof tagdd.hide === "function") tagdd.hide();
       });
     }catch(e){
