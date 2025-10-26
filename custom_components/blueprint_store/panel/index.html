@@ -1,165 +1,321 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Blueprint Store</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+/* Blueprint Store – UI glue
+ * Scope: only fixes requested (stable sort, tag filter, likes pill, dark desc area,
+ * dynamic heading, normalize import badges, contributors strip).
+ */
+const API = "/api/blueprint_store";
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-    <!-- Shoelace -->
-    <script
-      type="module"
-      src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js">
-    </script>
+/* ------------ small helpers ------------ */
+const esc = s =>
+  (s ?? "").toString().replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const delay = ms => new Promise(r => setTimeout(r, ms));
+const debounce = (fn, ms = 250) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
 
-    <style>
-      :root{
-        --blue-1:#0a5bd8; --blue-2:#0d3b8e; --ink:#e6f0ff; --muted:#b9c7e6;
-        --card-bg: linear-gradient(180deg, rgba(10,20,52,.78), rgba(8,18,46,.80));
-        --card-bd: rgba(170,200,255,.22);
-        --card-bd-hover:#9dd1ff66;
-        --shadow: 0 18px 50px rgba(6,16,50,.45);
-        --maxw: 1200px;
+async function fetchJSON(url, tries = 3) {
+  let backoff = 500;
+  for (let i = 0; i < tries; i++) {
+    const res = await fetch(url);
+    if (res.ok) return res.json();
+    if (res.status === 429 && i < tries - 1) { await delay(backoff); backoff *= 2; continue; }
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
+}
 
-        --sl-input-background-color: transparent;
-        --sl-input-border-color: rgba(255,255,255,.32);
-        --sl-color-neutral-0: rgba(16,34,86,.98);
-        --sl-panel-background-color: rgba(16,34,86,.98);
-      }
+/* ----------- state ----------- */
+const state = {
+  page: 0,
+  hasMore: true,
+  loading: false,
+  qTitle: "",
+  sort: "new",          // "new" | "title" | "likes"
+  tag: "",              // curated tag value or community tag
+  list: null,
+  sentinel: null,
+  headingEl: null,
+  searchEl: null,
+  sortSel: null,
+  tagMenu: null,
+  tagBtn: null
+};
 
-      * { box-sizing: border-box; }
-      body{
-        margin:0; color:var(--ink);
-        font-family: ui-sans-serif, system-ui, Segoe UI, Roboto, Ubuntu, "Helvetica Neue", Arial;
-        background: linear-gradient(180deg, var(--blue-1), var(--blue-2));
-        min-height:100vh;
-      }
-      body::after{
-        content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
-        background-image:
-          linear-gradient(to right, rgba(255,255,255,.12) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255,255,255,.12) 1px, transparent 1px);
-        background-size: 28px 28px;
-      }
+/* ---------- UI bits ---------- */
+function kfmt(n) {
+  if (n == null) return "0";
+  const x = Number(n);
+  if (!Number.isFinite(x)) return "0";
+  if (x >= 1_000_000) return `${(x / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (x >= 1_000) return `${(x / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${x}`;
+}
 
-      header{ position:sticky; top:0; z-index:8; backdrop-filter:blur(8px); border-bottom:1px solid #ffffff22; }
-      .bar{
-        max-width:var(--maxw); margin:0 auto; padding:8px 12px;
-        display:grid; grid-template-columns:auto 1fr auto auto auto; gap:10px; align-items:center;
-      }
-      .brand{ display:flex; gap:10px; align-items:center; font-weight:900; }
-      .brand img{ width:28px; height:28px; border-radius:6px; }
+function likePill(likes) {
+  return `
+    <div class="pill likes-pill" title="People who liked this post">
+      <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.1 8.64l-.1.1-.11-.11C10.14 6.6 6.5 7.24 6.5 10.05c0 1.54.99 3.04 3.09 4.96 1.05.95 2.18 1.85 2.51 2.12.33-.27 1.46-1.17 2.51-2.12 2.1-1.92 3.09-3.42 3.09-4.96 0-2.81-3.64-3.45-5.59-1.41z" fill="currentColor"/></svg>
+      <span class="pill-num">${kfmt(likes)}</span>
+      <span class="pill-suffix">Liked this</span>
+    </div>
+  `;
+}
 
-      sl-input::part(base){ background:transparent; }
-      sl-input::part(input){ color:#fff; }
-      sl-input::part(form-control-label){ color:#fff; }
+/* normalize forum “Import blueprint” mega badges to a compact pill */
+function normalizeImportBadges(scope) {
+  const sel = 'a[href*="redirect/blueprint_import"]';
+  $$(sel, scope).forEach(a => {
+    a.className = "myha-btn myha-inline-import";
+    a.innerHTML = '<svg class="i" viewBox="0 0 24 24"><path d="M10 20v-6H7l5-5 5 5h-3v6z" fill="currentColor"/></svg><span>Import to Home Assistant</span>';
+    // remove any nested images/icons that were in the original content
+    $$("img, svg:not(.i)", a).forEach(n => n.remove());
+    a.style.removeProperty("width");
+    a.style.removeProperty("height");
+  });
+}
 
-      /* Tags + Refresh buttons WITHOUT outlines */
-      .plain::part(base){
-        background:transparent; color:#fff; border:none !important; box-shadow:none !important; padding-inline:10px;
-      }
-      .plain::part(base):hover{ text-decoration: underline; }
+/* Install description HTML into the same dark area, expanding in-place */
+function setFullDescription(descContainer, html) {
+  const inner = $(".desc-inner", descContainer);
+  const full = $(".desc-full", descContainer);
+  full.innerHTML = html || "<em>No additional description.</em>";
+  normalizeImportBadges(full);
+  descContainer.classList.add("expanded");
+}
 
-      main{ max-width:var(--maxw); margin:12px auto 44px; padding:0 12px; }
-      .banner{ margin:8px 0 12px; border-radius:16px; overflow:hidden; box-shadow:var(--shadow); border:1px solid #ffffff22; }
-      .banner img{ width:100%; display:block; }
+/* card */
+function renderCard(item) {
+  const likes = item.likes ?? 0;
+  const tags = (item.tags || []).slice(0, 4);
 
-      .section-title{ margin:8px 0 12px; font-size:20px; font-weight:900; letter-spacing:.2px; }
-
-      .card{
-        position:relative;
-        border-radius:18px; border:1px solid var(--card-bd); background:var(--card-bg);
-        box-shadow: var(--shadow); padding:16px; margin:12px 0; overflow:hidden;
-      }
-      .card:hover{ border-color:var(--card-bd-hover); box-shadow: 0 26px 60px rgba(30,140,255,.30); }
-      .row{ display:flex; gap:12px; align-items:baseline; flex-wrap:wrap; }
-      .card h3{ margin:0; font-size:18px; font-weight:900; }
-      .author{ opacity:.92; font-weight:700; }
-      .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:6px 0 10px; }
-      .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
-
-      /* single description box that expands in place */
-      .desc-box{
-        background: rgba(3, 12, 36, 0.35);
-        border: 1px solid rgba(180,210,255, .15);
-        border-radius: 14px;
-        padding: 12px;
-        margin-top: 6px;
-      }
-      .desc{ color:var(--muted); margin:0; line-height:1.55; }
-      .toggle{ margin-top:8px; color:#cfe2ff; font-weight:700; cursor:pointer; user-select:none; display:inline-block; }
-      .more{ display:none; margin-top:10px; }
-      .more :where(h1,h2,h3){ font-weight:800; }
-      .more img{ max-width:100%; height:auto; border-radius:8px; }
-      .more a{ color:#aee1ff; }
-      .more pre{ white-space:pre-wrap; background:#07122f; padding:8px; border-radius:8px; overflow:auto; }
-
-      .card__footer{ display:flex; justify-content:flex-end; align-items:center; margin-top:12px; gap:10px; }
-
-      /* Likes pill bottom-left, not clickable */
-      .stat-pill{
-        position:absolute; left:14px; bottom:14px;
-        display:inline-flex; align-items:center; gap:10px;
-        padding:10px 14px; border-radius:999px; font-weight:800;
-        color:#eaf4ff;
-        background: linear-gradient(135deg, #1b2a6b, #2c57b8);
-        box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff3;
-        border: 1px solid rgba(255,255,255,.25);
-        pointer-events:none;
-      }
-      .stat-pill .label{ opacity:.85; font-weight:700; }
-      .stat-pill sl-icon{ font-size:1.1rem; }
-
-      .myha-btn{
-        --grad-a:#00b2ff; --grad-b:#0a84ff;
-        display:inline-flex; align-items:center; gap:8px;
-        padding:10px 14px; border-radius:999px; font-weight:800;
-        color:#032149; text-decoration:none;
-        background: linear-gradient(135deg, var(--grad-a), var(--grad-b));
-        box-shadow: 0 10px 24px rgba(4,96,200,.35), inset 0 1px 0 #fff6;
-        border: 1px solid rgba(255,255,255,.35);
-      }
-
-      #error, #empty{ text-align:center; color:#e7eefc; }
-      #sentinel{ height:60px; }
-    </style>
-  </head>
-  <body>
-    <header>
-      <div class="bar">
-        <div class="brand">
-          <span>Blueprint Store</span>
-        </div>
-
-        <sl-input id="search" placeholder="Search titles (finds every match)..." clearable pill>
-          <sl-icon name="search" slot="prefix"></sl-icon>
-        </sl-input>
-
-        <sl-select id="sort" value="new" hoist>
-          <sl-option value="new">Newest</sl-option>
-          <sl-option value="likes">Most liked</sl-option>
-          <sl-option value="title">Title A–Z</sl-option>
-        </sl-select>
-
-        <sl-dropdown id="tagdd" hoist>
-          <sl-button id="tagbtn" slot="trigger" caret class="plain" pill>All tags</sl-button>
-          <sl-menu id="tagmenu"></sl-menu>
-        </sl-dropdown>
-
-        <sl-button id="refresh" class="plain" pill>Refresh</sl-button>
-      </div>
+  const card = document.createElement("article");
+  card.className = "card";
+  card.innerHTML = `
+    <header class="card-hd">
+      <h3 class="ttl">${esc(item.title)}</h3>
+      ${item.author ? `<span class="author">by <strong>${esc(item.author)}</strong></span>` : ""}
     </header>
 
-    <main>
-      <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
+    <div class="tags">${tags.map(t => `<span class="tag">${esc(t)}</span>`).join("")}</div>
 
-      <div class="section-title" id="sectionTitle">All blueprints</div>
-      <div id="list"></div>
+    <section class="desc">
+      <div class="desc-inner">
+        <p class="excerpt">${esc(item.excerpt || "")}</p>
+        <div class="desc-full" hidden></div>
+      </div>
+      <button class="readmore" type="button">Read more</button>
+    </section>
 
-      <p id="empty" style="display:none">No blueprints matched.</p>
-      <p id="error" style="display:none"></p>
-      <div id="sentinel"></div>
-    </main>
+    <footer class="card-ft">
+      ${likePill(likes)}
+      <a class="cta-import" href="${esc(item.import_url || "#")}" target="_blank" rel="noopener">
+        <svg class="i" viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zM12 2l-5 5h3v6h4V7h3l-5-5z" fill="currentColor"/></svg>
+        <span>Import to Home Assistant</span>
+      </a>
+    </footer>
+  `;
 
-    <script src="./app.js?v=fix-tags-desc-likes" defer></script>
-  </body>
-</html>
+  // Read more toggle
+  const btn = $(".readmore", card);
+  const desc = $(".desc", card);
+  const full = $(".desc-full", card);
+  let loaded = false;
+
+  btn.addEventListener("click", async () => {
+    if (!loaded) {
+      try {
+        const data = await fetchJSON(`${API}/topic?id=${encodeURIComponent(item.id)}`);
+        setFullDescription(desc, data?.cooked || "");
+        full.hidden = false;
+        btn.textContent = "Less";
+        loaded = true;
+      } catch (e) {
+        full.hidden = false;
+        full.innerHTML = `<em>Failed to load post.</em>`;
+      }
+    } else {
+      const expanded = desc.classList.toggle("expanded");
+      full.hidden = !expanded;
+      btn.textContent = expanded ? "Less" : "Read more";
+    }
+  });
+
+  // prevent any action on the likes pill
+  $(".likes-pill", card).addEventListener("click", e => e.preventDefault());
+
+  return card;
+}
+
+function appendItems(items) {
+  const frag = document.createDocumentFragment();
+  items.forEach(it => frag.appendChild(renderCard(it)));
+  state.list.appendChild(frag);
+}
+
+/* ---------- fetching + filters ---------- */
+function buildQuery(page) {
+  const u = new URL(`${API}/blueprints`, location.origin);
+  u.searchParams.set("page", String(page));
+  if (state.qTitle) u.searchParams.set("q_title", state.qTitle);
+  if (state.sort) u.searchParams.set("sort", state.sort);
+  if (state.tag) {
+    // Support either name the backend expects
+    u.searchParams.set("tag", state.tag);
+    u.searchParams.set("bucket", state.tag);
+  }
+  return u.toString();
+}
+
+async function fetchPage(p) {
+  const url = buildQuery(p);
+  const data = await fetchJSON(url);
+  return {
+    items: data?.items || [],
+    hasMore: !!data?.has_more
+  };
+}
+
+async function load(initial = false) {
+  if (state.loading || (!state.hasMore && !initial)) return;
+  state.loading = true;
+
+  try {
+    const { items, hasMore } = await fetchPage(state.page);
+    state.hasMore = hasMore;
+    if (initial) state.list.innerHTML = "";
+    appendItems(items);
+    state.page += 1;
+  } catch (e) {
+    console.error("Load failed:", e);
+  } finally {
+    state.loading = false;
+  }
+}
+
+async function reloadAll() {
+  state.page = 0;
+  state.hasMore = true;
+  state.list.innerHTML = "";
+  updateHeading();
+  await load(true);
+}
+
+/* -------- heading text -------- */
+function updateHeading() {
+  const sortMap = { new: "Newest", likes: "Most liked", title: "A–Z" };
+  const bits = [];
+  bits.push(sortMap[state.sort] || "All");
+  if (state.tag) bits.push(`#${state.tag}`);
+  if (state.qTitle) bits.push(`“${state.qTitle}”`);
+  state.headingEl.textContent = `${bits.join(" · ")} blueprints`;
+}
+
+/* -------- contributors strip (best-effort) -------- */
+async function buildContributors() {
+  const host = $("#contributors");
+  if (!host) return;
+
+  try {
+    // Pull first few pages in most-liked and newest to compute metrics cheaply.
+    const topLiked = await fetchJSON(`${API}/blueprints?sort=likes&page=0`);
+    const newest = await fetchJSON(`${API}/blueprints?sort=new&page=0`);
+
+    const likedFirst = topLiked?.items?.[0];
+    const newestFirst = newest?.items?.[0];
+
+    // Count authors on first page (good enough for shout-out)
+    const counts = {};
+    (newest?.items || []).forEach(i => { counts[i.author] = (counts[i.author] || 0) + 1; });
+    let mostAuthor = Object.keys(counts).sort((a, b) => counts[b] - counts[a])[0];
+    const mostCount = mostAuthor ? counts[mostAuthor] : 0;
+
+    host.innerHTML = `
+      <div class="contrib-card">
+        <div class="contrib-hd">Most popular</div>
+        ${likedFirst ? `<div class="contrib-author">${esc(likedFirst.author || "—")}</div>
+        <div class="contrib-sub">${esc(likedFirst.title || "")}</div>` : `<div class="muted">No data</div>`}
+      </div>
+      <div class="contrib-card">
+        <div class="contrib-hd">Most blueprints</div>
+        ${mostAuthor ? `<div class="contrib-author">${esc(mostAuthor)}</div>
+        <div class="contrib-sub">${mostCount} blueprint(s)</div>` : `<div class="muted">No data</div>`}
+      </div>
+      <div class="contrib-card">
+        <div class="contrib-hd">Most recent</div>
+        ${newestFirst ? `<div class="contrib-author">${esc(newestFirst.author || "—")}</div>
+        <div class="contrib-sub">${esc(newestFirst.title || "")}</div>` : `<div class="muted">No data</div>`}
+      </div>
+    `;
+  } catch (e) {
+    host.innerHTML = `<div class="muted">Unable to build contributors right now.</div>`;
+  }
+}
+
+/* ---------- boot ---------- */
+function attachSort() {
+  // Shoelace <sl-select> fires sl-change; make it single-bound and stable.
+  if (!state.sortSel.__bound) {
+    state.sortSel.__bound = true;
+    state.sortSel.addEventListener("sl-change", async () => {
+      // value is "new" | "likes" | "title"
+      state.sort = state.sortSel.value || "new";
+      await reloadAll();
+    });
+  }
+}
+function attachSearch() {
+  const onSearch = debounce(async () => {
+    state.qTitle = (state.searchEl.value || "").trim();
+    await reloadAll();
+  }, 280);
+  state.searchEl.addEventListener("sl-input", onSearch);
+  state.searchEl.addEventListener("sl-clear", onSearch);
+}
+function attachTags() {
+  // Fill menu then handle selection
+  state.tagMenu.innerHTML = "";
+  state.tagMenu.insertAdjacentHTML("beforeend", `<sl-menu-item value="">All tags</sl-menu-item>`);
+
+  // Get curated/available tags from backend
+  fetchJSON(`${API}/filters`).then(data => {
+    const tags = Array.isArray(data?.tags) ? data.tags : [];
+    tags.forEach(t => state.tagMenu.insertAdjacentHTML("beforeend", `<sl-menu-item value="${esc(t)}">${esc(t)}</sl-menu-item>`));
+  }).catch(() => { /* optional */ });
+
+  if (!state.tagMenu.__bound) {
+    state.tagMenu.__bound = true;
+    state.tagMenu.addEventListener("sl-select", async (ev) => {
+      const val = ev.detail.item?.value || "";
+      state.tag = val;
+      state.tagBtn.textContent = val || "All tags";
+      // close dropdown
+      const dd = $("#tagdd"); if (dd && dd.hide) dd.hide();
+      await reloadAll();
+    });
+  }
+}
+
+function watchInfiniteScroll() {
+  const io = new IntersectionObserver((entries) => {
+    if (entries[0]?.isIntersecting) load(false);
+  }, { rootMargin: "800px" });
+  io.observe(state.sentinel);
+}
+
+async function boot() {
+  state.list      = $("#list");
+  state.sentinel  = $("#sentinel");
+  state.headingEl = $("#heading");
+  state.searchEl  = $("#search");
+  state.sortSel   = $("#sort");
+  state.tagMenu   = $("#tagmenu");
+  state.tagBtn    = $("#tagbtn");
+
+  attachSort();
+  attachSearch();
+  attachTags();
+  watchInfiniteScroll();
+  updateHeading();
+  await buildContributors();
+  await load(true);
+}
+
+document.addEventListener("DOMContentLoaded", boot);
