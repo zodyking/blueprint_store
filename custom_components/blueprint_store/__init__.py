@@ -49,9 +49,10 @@ def _cfg(hass: HomeAssistant):
 async def _fetch_json(session, url):
     headers = {
         "Accept": "application/json",
-        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://home-assistant.io)"
+        "User-Agent": "HomeAssistant-BlueprintStore/0.5 (+https://home-assistant.io)",
+        "Referer": f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}"
     }
-    async with session.get(url, headers=headers) as resp:
+    async with session.get(url, headers=headers, allow_redirects=True) as resp:
         resp.raise_for_status()
         return await resp.json()
 
@@ -188,22 +189,42 @@ async def _topic_detail(session, topic_id: int):
         "cooked": cooked,
     }
 
+async def _fetch_category_topics(session, page: int):
+    """
+    Try several Discourse endpoints; return {'topics': [...], 'more': bool}
+    """
+    endpoints = [
+        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
+        f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
+        f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}",
+    ]
+    last_error = None
+    for url in endpoints:
+        try:
+            data = await _fetch_json(session, url)
+            topic_list = data.get("topic_list", data) or {}
+            topics = topic_list.get("topics", []) or []
+            more = bool(topic_list.get("more_topics_url") or topic_list.get("more_topics"))
+            return {"topics": topics, "more": more}
+        except Exception as e:
+            last_error = e
+            _LOGGER.debug("Blueprint Store: list endpoint failed %s -> %s", url, e)
+            continue
+    raise last_error if last_error else RuntimeError("No category endpoint succeeded")
+
 async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket_filter: str | None):
     session = async_get_clientsession(hass)
-    primary = f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}"
-    fallback = f"{COMMUNITY_BASE}/c/{CATEGORY_ID}.json?page={page}"
-    try:
-        data = await _fetch_json(session, primary)
-    except Exception:
-        data = await _fetch_json(session, fallback)
+    data = await _fetch_category_topics(session, page)
+    topics = data["topics"]
 
-    topics = (data.get("topic_list", {}) or data).get("topics", [])
-    sem = asyncio.Semaphore(10)
+    sem = asyncio.Semaphore(8)
     out = []
 
     async def process(t):
         async with sem:
-            tid = t["id"]
+            tid = t.get("id")
+            if not tid:
+                return
             title = t.get("title") or t.get("fancy_title") or f"Topic {tid}"
             topic_tags = set(t.get("tags") or [])
             if q_title and q_title.lower() not in title.lower():
@@ -230,15 +251,10 @@ async def _list_page(hass: HomeAssistant, page: int, q_title: str | None, bucket
                 "bucket": bucket,
             })
 
-    tasks = []
-    for t in topics:
-        if isinstance(t, dict) and "id" in t:
-            tasks.append(asyncio.create_task(process(t)))
-    if tasks:
-        await asyncio.gather(*tasks)
+    await asyncio.gather(*(process(t) for t in topics if isinstance(t, dict)))
 
     out.sort(key=lambda x: x["id"], reverse=True)
-    return out
+    return out, bool(data.get("more"))
 
 class BlueprintsPagedView(HomeAssistantView):
     url = f"{API_BASE}/blueprints"
@@ -263,12 +279,12 @@ class BlueprintsPagedView(HomeAssistantView):
             return self.json({"items": [], "page": page, "has_more": False})
 
         try:
-            items = await _list_page(self.hass, page, q_title, bucket)
+            items, more_hint = await _list_page(self.hass, page, q_title, bucket)
             if sort == "title":
                 items.sort(key=lambda x: x["title"].lower())
             elif sort == "uses":
                 items.sort(key=lambda x: (x["uses"] or 0), reverse=True)
-            has_more = (page + 1) < max_pages and len(items) >= 0
+            has_more = more_hint or ((page + 1) < max_pages and len(items) >= 0)
             return self.json({"items": items, "page": page, "has_more": has_more})
         except Exception as e:
             _LOGGER.exception("Blueprint Store: paged list failed")
@@ -339,8 +355,6 @@ class BlueprintImagesStaticView(HomeAssistantView):
         return web.FileResponse(path)
 
 async def _register_views_and_panel(hass: HomeAssistant):
-    """Isolated so we can call from setup or on_started safely."""
-    # Views
     try:
         hass.http.register_view(BlueprintsPagedView(hass))
         hass.http.register_view(BlueprintFiltersView(hass))
@@ -348,7 +362,6 @@ async def _register_views_and_panel(hass: HomeAssistant):
     except Exception as e:
         _LOGGER.exception("Blueprint Store: failed to register API views: %s", e)
 
-    # Static
     try:
         panel_dir = os.path.join(os.path.dirname(__file__), "panel")
         images_dir = os.path.join(os.path.dirname(__file__), "images")
@@ -357,7 +370,6 @@ async def _register_views_and_panel(hass: HomeAssistant):
     except Exception as e:
         _LOGGER.exception("Blueprint Store: failed to register static views: %s", e)
 
-    # Sidebar panel
     try:
         reg = getattr(ha_frontend, "async_register_built_in_panel", None)
         if reg:
@@ -385,7 +397,6 @@ async def _register(hass: HomeAssistant):
 async def async_setup(hass: HomeAssistant, _config) -> bool:
     try:
         if getattr(hass, "http", None) is None:
-            # Defer until HA is fully started
             async def _on_started(_):
                 await _register(hass)
             hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _on_started)
@@ -393,7 +404,6 @@ async def async_setup(hass: HomeAssistant, _config) -> bool:
             await _register(hass)
     except Exception as e:
         _LOGGER.exception("Blueprint Store: async_setup soft-failed: %s", e)
-        # soft-success so the entry can still be created; views/panel will attach on_started
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -410,7 +420,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
     except Exception as e:
         _LOGGER.exception("Blueprint Store: async_setup_entry soft-failed: %s", e)
-        # Return True so HA doesn't mark the entry broken; we’ll attach the panel on_started
         return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
