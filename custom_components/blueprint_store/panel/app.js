@@ -1,34 +1,55 @@
 const API = "/api/blueprint_browser";
 const $ = (sel) => document.querySelector(sel);
-const listEl = $("#list");
+
+const listEl   = $("#list");
+const emptyEl  = $("#empty");
+const errorEl  = $("#error");
+const loadEl   = $("#loading");
 const detailEl = $("#detail");
 const searchEl = $("#search");
+const sortEl   = $("#sort");
 const refreshBtn = $("#refresh");
 
 let items = [];
 let filtered = [];
 
+// ---------- utils ----------
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+  );
+}
+const debounce = (fn, ms=200) => {
+  let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+};
+
+// ---------- render ----------
 function card(item) {
-  const div = document.createElement("div");
-  div.className = "card";
-  div.innerHTML = `
-    <button class="title link" style="all:unset;cursor:pointer;color:#2563eb">${escapeHtml(item.title)}</button>
-    <p class="excerpt">${escapeHtml(item.excerpt || "")}</p>
+  const el = document.createElement("article");
+  el.className = "card";
+  el.innerHTML = `
+    <div class="card-head">
+      <h3 class="title">${escapeHtml(item.title)}</h3>
+    </div>
+    <div class="body">${escapeHtml(item.excerpt || "")}</div>
     <div class="meta">
       <a class="link" href="${item.topic_url}" target="_blank" rel="noopener">Forum post</a>
-      <a class="link btn-primary" href="${item.import_url}" target="_blank" rel="noopener">Import</a>
+      <a class="link btn-primary import" href="${item.import_url}" target="_blank" rel="noopener" style="padding:8px 12px;border-radius:10px;color:#fff;">Import</a>
     </div>
   `;
-  div.querySelector(".title").addEventListener("click", () => showDetail(item));
-  return div;
+  el.querySelector(".title").addEventListener("click", () => showDetail(item));
+  return el;
 }
 
 function render() {
   listEl.innerHTML = "";
   if (!filtered.length) {
-    listEl.innerHTML = `<div class="empty">No blueprints matched.</div>`;
+    listEl.style.display = "none";
+    emptyEl.style.display = "block";
     return;
   }
+  emptyEl.style.display = "none";
+  listEl.style.display = "grid";
   filtered.forEach((it) => listEl.appendChild(card(it)));
 }
 
@@ -37,34 +58,51 @@ function showDetail(item) {
   $("#d-excerpt").textContent = item.excerpt || "";
   $("#d-topic").href = item.topic_url;
   $("#d-import").href = item.import_url;
-  listEl.style.display = "none";
+  $("main").style.display = "none";
   detailEl.style.display = "block";
 }
 
 function showList() {
   detailEl.style.display = "none";
-  listEl.style.display = "block";
+  $("main").style.display = "block";
 }
 
-function escapeHtml(s) {
-  return (s || "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
-}
-
-function applyFilter() {
+// ---------- filtering & sorting ----------
+function doFilterAndSort() {
   const q = (searchEl.value || "").trim().toLowerCase();
-  filtered = !q ? items : items.filter(i =>
+  filtered = !q ? items.slice() : items.filter(i =>
     i.title.toLowerCase().includes(q) || (i.excerpt || "").toLowerCase().includes(q)
   );
+  switch (sortEl.value) {
+    case "az": filtered.sort((a,b) => a.title.localeCompare(b.title)); break;
+    case "za": filtered.sort((a,b) => b.title.localeCompare(a.title)); break;
+    default:   filtered.sort((a,b) => b.id - a.id); // newest
+  }
   render();
 }
 
-async function load(q="") {
-  const url = q ? `${API}/blueprints?q=${encodeURIComponent(q)}` : `${API}/blueprints`;
-  const res = await fetch(url, { credentials: "same-origin" });
-  if (!res.ok) throw new Error(await res.text());
-  items = await res.json();
-  filtered = items.slice();
-  render();
+const onSearch = debounce(doFilterAndSort, 180);
+searchEl.addEventListener("input", onSearch);
+sortEl.addEventListener("change", doFilterAndSort);
+
+// ---------- data ----------
+async function load() {
+  loadEl.style.display = "block";
+  errorEl.style.display = "none";
+  listEl.style.display = "none";
+  emptyEl.style.display = "none";
+
+  try {
+    const res = await fetch(`${API}/blueprints`, { credentials: "same-origin" });
+    if (!res.ok) throw new Error(await res.text());
+    items = await res.json();
+    doFilterAndSort();
+  } catch (e) {
+    errorEl.textContent = `Failed to load: ${String(e.message || e)}`;
+    errorEl.style.display = "block";
+  } finally {
+    loadEl.style.display = "none";
+  }
 }
 
 async function refresh() {
@@ -72,16 +110,15 @@ async function refresh() {
   try {
     await fetch(`${API}/refresh`, { method: "POST", credentials: "same-origin" });
     await load();
-  } catch(e) {
-    alert("Refresh failed: " + e);
+  } catch (e) {
+    errorEl.textContent = `Refresh failed: ${String(e.message || e)}`;
+    errorEl.style.display = "block";
   } finally {
     refreshBtn.disabled = false;
   }
 }
 
-searchEl.addEventListener("input", applyFilter);
 refreshBtn.addEventListener("click", refresh);
 
-load().catch(e => {
-  listEl.innerHTML = `<div class="empty">Failed to load: ${escapeHtml(String(e))}</div>`;
-});
+// kick off
+load();
