@@ -214,13 +214,11 @@ class BlueprintsTopView(HomeAssistantView):
             while page < max_pages and len(found) < limit:
                 items = await _list_page(self.hass, page, None, None)
                 for it in items:
-                    # keep ones with a detected 'uses' number first
                     if it.get("uses") is not None:
                         found.append(it)
                         if len(found) >= limit:
                             break
                 page += 1
-            # If we still don't have enough, fill with most-recent (uses may be None)
             if len(found) < limit:
                 page = 0
                 filler = []
@@ -230,7 +228,6 @@ class BlueprintsTopView(HomeAssistantView):
                 need = limit - len(found)
                 found.extend(filler[:need])
 
-            # sort by uses desc (unknown last)
             found.sort(key=lambda x: (x["uses"] is None, -(x["uses"] or 0)))
             return self.json({"items": found[:limit]})
         except Exception as e:
@@ -273,6 +270,8 @@ class BlueprintFiltersView(HomeAssistantView):
             _LOGGER.exception("Blueprint Store: filters failed")
             return self.json({"tags": [], "error": f"{type(e).__name__}: {e}"})
 
+# -------- Static panel + images --------
+
 class BlueprintStaticView(HomeAssistantView):
     """Serve /panel files (version-proof)."""
     url = f"{STATIC_BASE}/{{filename:.*}}"
@@ -289,6 +288,21 @@ class BlueprintStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
+class BlueprintImagesStaticView(HomeAssistantView):
+    """Serve files placed in custom_components/blueprint_store/images/"""
+    url = f"{STATIC_BASE}/images/{{filename:.*}}"
+    name = f"{DOMAIN}:static_images"
+    requires_auth = False
+    cors_allowed = True
+    def __init__(self, images_dir: str) -> None:
+        self._images_dir = images_dir
+    async def get(self, request, filename: str):
+        base = os.path.abspath(self._images_dir)
+        path = os.path.abspath(os.path.join(base, filename or ""))
+        if not path.startswith(base) or not os.path.isfile(path):
+            return self.json_message("Not found", status_code=404)
+        return web.FileResponse(path)
+
 # -------- registration --------
 async def _register(hass: HomeAssistant):
     store = hass.data.setdefault(DOMAIN, {})
@@ -299,7 +313,9 @@ async def _register(hass: HomeAssistant):
     hass.http.register_view(BlueprintFiltersView(hass))
 
     panel_dir = os.path.join(os.path.dirname(__file__), "panel")
+    images_dir = os.path.join(os.path.dirname(__file__), "images")
     hass.http.register_view(BlueprintStaticView(panel_dir))
+    hass.http.register_view(BlueprintImagesStaticView(images_dir))
 
     reg = getattr(ha_frontend, "async_register_built_in_panel", None)
     if reg:
