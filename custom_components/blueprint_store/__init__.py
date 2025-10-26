@@ -2,6 +2,7 @@ import asyncio
 import html
 import os
 import re
+import inspect
 from time import time
 from urllib.parse import urljoin
 
@@ -10,7 +11,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.components.frontend import async_register_built_in_panel
+from homeassistant.components import frontend as ha_frontend  # module import (works across versions)
 
 from .const import (
     DOMAIN,
@@ -150,7 +151,7 @@ class BlueprintRefreshView(HomeAssistantView):
         return self.json({"ok": True})
 
 class BlueprintStaticView(HomeAssistantView):
-    """Serve /panel files without using HA's static path API (version-proof)."""
+    """Serve /panel files without static-path API (version-proof)."""
     url = f"{STATIC_BASE}/{{filename:.*}}"
     name = f"{DOMAIN}:static"
     requires_auth = True
@@ -164,6 +165,7 @@ class BlueprintStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
+# ---------- panel registration ----------
 async def _register_panel_and_routes(hass: HomeAssistant):
     store = hass.data.setdefault(DOMAIN, {})
     if store.get("registered"):
@@ -174,20 +176,25 @@ async def _register_panel_and_routes(hass: HomeAssistant):
     hass.http.register_view(BlueprintTopicView(hass))
     hass.http.register_view(BlueprintRefreshView(hass))
 
-    # Static (index.html, app.js) served via our own view
+    # Static files served via our own view
     panel_dir = os.path.join(os.path.dirname(__file__), "panel")
     hass.http.register_view(BlueprintStaticView(panel_dir))
 
-    # Sidebar panel (iframe → our index.html)
-    await async_register_built_in_panel(
-        hass,
-        component_name="iframe",
-        sidebar_title=SIDEBAR_TITLE,
-        sidebar_icon=SIDEBAR_ICON,
-        frontend_url_path=DOMAIN,
-        config={"url": PANEL_URL},
-        require_admin=False,
-    )
+    # Sidebar panel (handle sync/async across HA versions)
+    reg = getattr(ha_frontend, "async_register_built_in_panel", None)
+    if reg:
+        result = reg(
+            hass,
+            component_name="iframe",
+            sidebar_title=SIDEBAR_TITLE,
+            sidebar_icon=SIDEBAR_ICON,
+            frontend_url_path=DOMAIN,
+            config={"url": PANEL_URL},
+            require_admin=False,
+        )
+        if inspect.isawaitable(result):
+            await result
+
     store["registered"] = True
 
 # ---------- HA entry points ----------
@@ -206,11 +213,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    try:
-        # Best-effort: remove panel if present
-        from homeassistant.components.frontend import async_remove_panel
-        await async_remove_panel(hass, DOMAIN)
-    except Exception:
-        pass
+    # Remove panel if available (supports both sync/async)
+    rem = getattr(ha_frontend, "async_remove_panel", None)
+    if rem:
+        result = rem(hass, DOMAIN)
+        if inspect.isawaitable(result):
+            await result
     hass.data.get(DOMAIN, {}).pop("registered", None)
     return True
