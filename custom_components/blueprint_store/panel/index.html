@@ -65,7 +65,8 @@
     .contrib-card{ border:1px solid var(--card-bd); background: var(--card-bg); border-radius:14px; padding:16px; display:flex; flex-direction:column; justify-content:flex-start; align-items:center; min-height:120px; text-align:center; }
     .contrib-card h4{ margin:0 0 6px; font-weight:900; }
     .contrib-title{ font-weight:800; margin:8px 0 0; }
-    .contrib-chip{ background:#0b1c48; border:1px solid #184a88; padding:6px 9px; border-radius:999px; font-weight:700; margin-top:8px; }
+    .contrib-chip{ background:#0b1c48; border:1px solid #184a88; padding:6px 10px; border-radius:999px; font-weight:800; margin-top:10px; display:inline-block; }
+    .skeleton{ height:16px; width:70%; background:#0b1c48; border-radius:8px; opacity:.6; }
 
     /* cards */
     .card{
@@ -126,10 +127,14 @@
   <main>
     <div class="banner"><img src="/blueprint_store_static/images/bps_banner.png" alt="Blueprint Store banner"></div>
 
-    <section id="contrib" class="contrib" style="display:none">
+    <section id="contrib" class="contrib">
       <h3 class="contrib-head">Creators Spotlight</h3>
       <p class="contrib-sub">Shout-outs to makers moving the community forward.</p>
-      <div class="contrib-grid" id="contribGrid"></div>
+      <div class="contrib-grid" id="contribGrid">
+        <div class="contrib-card"><h4>Most Popular Blueprint</h4><div class="skeleton"></div></div>
+        <div class="contrib-card"><h4>Most Uploaded Blueprints</h4><div class="skeleton"></div></div>
+        <div class="contrib-card"><h4>Most Recent Upload</h4><div class="skeleton"></div></div>
+      </div>
     </section>
 
     <div class="section-title" id="headingEl">All blueprints</div>
@@ -140,6 +145,6 @@
     <div id="sentinel"></div>
   </main>
 
-  <script src="./app.js?v=spotlight-restore-4" defer></script>
+  <script src="./app.js?v=spotlight-restore-6" defer></script>
 </body>
 </html>
