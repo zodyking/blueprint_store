@@ -31,10 +31,33 @@ async function fetchJSON(url, tries=3){
   }
 }
 
+/* ----- resilient opener: blank tab -> then navigate (with meta refresh fallback) ----- */
+function openExternal(url){
+  try{
+    const w = window.open("", "_blank");   // blank inherits our origin
+    if (w) {
+      try { w.opener = null; } catch {}
+      const safe = String(url).replace(/"/g, "&quot;");
+      // lightweight fallback content
+      w.document.write(`<!doctype html><meta charset="utf-8">
+        <title>Opening…</title>
+        <style>body{font-family:system-ui,Segoe UI,Roboto;padding:2rem;color:#123}
+        a{color:#06c;font-weight:700}</style>
+        <p>Opening forum… If nothing happens <a href="${safe}">click here</a>.</p>
+        <meta http-equiv="refresh" content="0; url='${safe}'">`);
+      try { w.location.href = url; } catch {}
+      return true;
+    }
+  } catch {}
+  // ultimate fallback – same tab
+  try { window.top.location.assign(url); } catch { location.assign(url); }
+  return false;
+}
+
 /* pill buttons */
 function importButton(href){
   return `
-    <a class="myha-btn" href="${href}" target="_blank" rel="noopener noreferrer">
+    <a class="myha-btn" data-open="${esc(href)}">
       <sl-icon name="house"></sl-icon>
       Import to Home Assistant
     </a>`;
@@ -50,7 +73,7 @@ function forumButtonRedirect(tid, slug){
   const qs = new URLSearchParams({ tid: String(tid), slug: slug || "" }).toString();
   const href = `${API}/go?${qs}`;
   return `
-    <a class="myha-btn secondary" href="${href}" target="_blank" rel="noopener noreferrer">
+    <a class="myha-btn secondary" data-open="${esc(href)}">
       <sl-icon name="box-arrow-up-right"></sl-icon>
       Forum post
     </a>`;
@@ -99,21 +122,24 @@ function setPostHTML(container, html){
     const href = a.getAttribute("href") || a.textContent || "#";
     const pill = document.createElement("a");
     pill.className = "myha-btn myha-inline-import";
-    pill.href = href;
-    pill.target = "_blank";
-    pill.rel = "noopener noreferrer";
+    pill.setAttribute("data-open", href);
     pill.innerHTML = `<sl-icon name="house"></sl-icon> Import to Home Assistant`;
     a.replaceWith(pill);
   });
 
-  // Rewrite forum-topic links to same-origin redirect
+  // Rewrite forum-topic links to same-origin redirect + add data-open
   tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
     const redir = rewriteToRedirect(a.getAttribute("href"));
-    if (redir) a.setAttribute("href", redir);
+    if (redir) a.setAttribute("data-open", redir);
   });
 
-  // external links open new tab
-  tmp.querySelectorAll("a[href]").forEach(a => a.setAttribute("target","_blank"));
+  // intercept clicks on any data-open inside description
+  tmp.addEventListener("click", (ev)=>{
+    const a = ev.target.closest("[data-open]");
+    if (!a) return;
+    ev.preventDefault();
+    openExternal(a.getAttribute("data-open"));
+  });
 
   container.innerHTML = "";
   container.appendChild(tmp);
@@ -178,6 +204,14 @@ function renderCard(it){
     } else {
       await expandNow();
     }
+  });
+
+  // Intercept open buttons on the card footer
+  el.addEventListener("click", (ev)=>{
+    const opener = ev.target.closest("[data-open]");
+    if (!opener) return;
+    ev.preventDefault();
+    openExternal(opener.getAttribute("data-open"));
   });
 
   const viewBtn = el.querySelector('button[data-viewdesc="1"]');
