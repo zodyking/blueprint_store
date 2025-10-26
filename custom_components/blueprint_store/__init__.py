@@ -190,9 +190,6 @@ async def _topic_detail(session, topic_id: int):
     }
 
 async def _fetch_category_topics(session, page: int):
-    """
-    Try several Discourse endpoints; return {'topics': [...], 'more': bool}
-    """
     endpoints = [
         f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}/l/latest.json?page={page}",
         f"{COMMUNITY_BASE}/c/blueprints-exchange/{CATEGORY_ID}.json?page={page}",
@@ -354,45 +351,70 @@ class BlueprintImagesStaticView(HomeAssistantView):
             return self.json_message("Not found", status_code=404)
         return web.FileResponse(path)
 
+# ---------- NEW: safe, idempotent registration with a lock ----------
 async def _register_views_and_panel(hass: HomeAssistant):
-    try:
-        hass.http.register_view(BlueprintsPagedView(hass))
-        hass.http.register_view(BlueprintFiltersView(hass))
-        hass.http.register_view(BlueprintTopicView(hass))
-    except Exception as e:
-        _LOGGER.exception("Blueprint Store: failed to register API views: %s", e)
+    """Register API views, static routes and sidebar panel exactly once."""
+    store = hass.data.setdefault(DOMAIN, {})
+    lock: asyncio.Lock = store.setdefault("reg_lock", asyncio.Lock())
+    async with lock:
+        # Views (idempotent in HA http router)
+        try:
+            hass.http.register_view(BlueprintsPagedView(hass))
+            hass.http.register_view(BlueprintFiltersView(hass))
+            hass.http.register_view(BlueprintTopicView(hass))
+        except Exception as e:
+            _LOGGER.exception("Blueprint Store: failed to register API views: %s", e)
 
-    try:
-        panel_dir = os.path.join(os.path.dirname(__file__), "panel")
-        images_dir = os.path.join(os.path.dirname(__file__), "images")
-        hass.http.register_view(BlueprintStaticView(panel_dir))
-        hass.http.register_view(BlueprintImagesStaticView(images_dir))
-    except Exception as e:
-        _LOGGER.exception("Blueprint Store: failed to register static views: %s", e)
+        # Static
+        try:
+            panel_dir = os.path.join(os.path.dirname(__file__), "panel")
+            images_dir = os.path.join(os.path.dirname(__file__), "images")
+            hass.http.register_view(BlueprintStaticView(panel_dir))
+            hass.http.register_view(BlueprintImagesStaticView(images_dir))
+        except Exception as e:
+            _LOGGER.exception("Blueprint Store: failed to register static views: %s", e)
 
-    try:
-        reg = getattr(ha_frontend, "async_register_built_in_panel", None)
-        if reg:
-            result = reg(
-                hass,
-                component_name="iframe",
-                sidebar_title=SIDEBAR_TITLE,
-                sidebar_icon=SIDEBAR_ICON,
-                frontend_url_path=DOMAIN,
-                config={"url": PANEL_URL},
-                require_admin=False,
-            )
-            if inspect.isawaitable(result):
-                await result
-    except Exception as e:
-        _LOGGER.exception("Blueprint Store: failed to register sidebar panel: %s", e)
+        # Sidebar panel — remove existing if present to avoid Overwriting error
+        try:
+            remover = getattr(ha_frontend, "async_remove_panel", None)
+            if remover:
+                maybe = remover(hass, DOMAIN)
+                if inspect.isawaitable(maybe):
+                    await maybe
+        except Exception:
+            # best-effort: ignore if it didn't exist
+            pass
+
+        try:
+            reg = getattr(ha_frontend, "async_register_built_in_panel", None)
+            if reg:
+                result = reg(
+                    hass,
+                    component_name="iframe",
+                    sidebar_title=SIDEBAR_TITLE,
+                    sidebar_icon=SIDEBAR_ICON,
+                    frontend_url_path=DOMAIN,
+                    config={"url": PANEL_URL},
+                    require_admin=False,
+                )
+                if inspect.isawaitable(result):
+                    await result
+            store["registered"] = True
+        except ValueError as e:
+            # If another racing caller registered first, treat as success
+            if "Overwriting panel" in str(e):
+                _LOGGER.debug("Blueprint Store: panel already exists; continuing")
+                store["registered"] = True
+            else:
+                _LOGGER.exception("Blueprint Store: failed to register sidebar panel: %s", e)
+        except Exception as e:
+            _LOGGER.exception("Blueprint Store: failed to register sidebar panel: %s", e)
 
 async def _register(hass: HomeAssistant):
     store = hass.data.setdefault(DOMAIN, {})
     if store.get("registered"):
         return
     await _register_views_and_panel(hass)
-    store["registered"] = True
 
 async def async_setup(hass: HomeAssistant, _config) -> bool:
     try:
