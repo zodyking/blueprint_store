@@ -1,17 +1,16 @@
 DOMAIN = "blueprint_browser"
 
 # Discourse category: Blueprints Exchange (id 53)
-# We page through a few pages for performance; bump if you want more.
 CATEGORY_ID = 53
-MAX_PAGES = 3  # 3 pages ~ recent topics; increase for deeper history
 
-# Cache refresh (seconds)
-CACHE_SECONDS = 6 * 60 * 60  # 6 hours
+# Defaults (UI Options can override)
+DEFAULT_MAX_PAGES = 3               # how many forum pages to scan
+DEFAULT_CACHE_SECONDS = 6 * 60 * 60 # 6 hours
 
 # HTTP base
 COMMUNITY_BASE = "https://community.home-assistant.io"
 
-# Recognize posts that have a "My HA" blueprint import button
+# Look for the standard My Home Assistant blueprint import redirect
 IMPORT_PATH_FRAGMENT = "/redirect/blueprint_import"
 
 API_BASE = "/api/blueprint_browser"
