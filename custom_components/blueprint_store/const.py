@@ -1,41 +1,20 @@
+from __future__ import annotations
+from datetime import timedelta
+
 DOMAIN = "blueprint_store"
 
-# Discourse category: Blueprints Exchange (id 53)
+# Discourse category: Blueprints Exchange
+DISCOURSE_BASE = "https://community.home-assistant.io"
 CATEGORY_ID = 53
 
-# Crawl limits / refresh
-DEFAULT_MAX_PAGES = 800
-DEFAULT_CACHE_SECONDS = 6 * 60 * 60
+# Update cadence (with jitter in coordinator)
+UPDATE_INTERVAL = timedelta(minutes=30)
 
-# Discourse + import detection
-COMMUNITY_BASE = "https://community.home-assistant.io"
-IMPORT_PATH_FRAGMENT = "/redirect/blueprint_import"
+# Static UI (keep your current folder names)
+PANEL_URL_PATH = "blueprint_store"
+STATIC_URL_PATH = "/blueprint_store_static"
+STATIC_DIR_NAME = "www"  # <config>/custom_components/blueprint_store/www
+INDEX_RELATIVE = "index.html"
 
-# HTTP endpoints & panel
-API_BASE = "/api/blueprint_store"
-STATIC_BASE = "/blueprint_store_static"
-PANEL_URL = f"{STATIC_BASE}/index.html"
-
-# Sidebar
-SIDEBAR_TITLE = "Blueprint Store"
-SIDEBAR_ICON = "mdi:clipboard-text-search-outline"
-
-# Curated categories shown in the UI (and used for server-side filtering)
-CURATED_BUCKETS = [
-    "Lighting",
-    "Climate & Ventilation",
-    "Security & Alarm",
-    "Safety (Smoke/CO/Leak)",
-    "Presence & Occupancy",
-    "Access & Locks",
-    "Cameras & Vision",
-    "Media & Entertainment",
-    "AI & Assistants",                 # NEW
-    "Announcements & Notifications",   # (TTS lives here)
-    "Energy & Power",
-    "Environment & Weather",
-    "Appliances & Utilities",
-    "Scheduling & Scenes",
-    "System & Maintenance",
-    "Other",
-]
+# Page size for API (matches your frontend)
+PAGE_SIZE = 30
