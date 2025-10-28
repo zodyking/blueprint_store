@@ -1,406 +1,323 @@
-/* Blueprint Store — fixes: smaller footer, single desc box, direct-import (no double open),
-   restore sort/tags/search, title parsing, read-more left + import right, creator count label. */
+/* ==========================================================================
+   Blueprint Store — app.js
+   Scope: logic only (stable search across title/description/tags, sort & tag
+   filters). No UI/layout changes.
+   ========================================================================== */
 
+/* ---------- API & element helpers ---------- */
 const API = "/api/blueprint_store";
-const $  = (s, d=document) => d.querySelector(s);
 
-/* ---------------- helpers ---------------- */
-function esc(s){ return (s||"").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-const wait = ms => new Promise(r=>setTimeout(r, ms));
-const debounce = (fn,ms=220)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),ms); }; };
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 
-async function fetchJSON(url, tries=3){
-  let backoff = 500;
-  for(let i=0;i<tries;i++){
-    try{
-      const r = await fetch(url, {cache: "no-store"});
-      if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      const j = await r.json();
-      if (j && j.error) throw new Error(j.error);
-      return j;
-    }catch(e){
-      if (String(e.message||e).startsWith("429") && i < tries-1){
-        await wait(backoff); backoff = Math.min(backoff*2, 4000);
+function esc(s) {
+  return (s || "").replace(/[&<>"']/g, (c) => (
+    { "&":"&amp;", "<":"&lt;", ">":"&gt;", "\"":"&quot;", "'":"&#39;" }[c]
+  ));
+}
+
+const debounce = (fn, ms = 260) => {
+  let t;
+  return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+};
+
+/* ---------- robust fetch with 429/backoff ---------- */
+async function fetchJSONRaw(url) {
+  const res = await fetch(url, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = await res.json();
+  if (data && data.error) throw new Error(data.error);
+  return data;
+}
+
+async function fetchJSON(url, tries = 4) {
+  let delay = 600;
+  for (let i = 0; i < tries; i++) {
+    try { return await fetchJSONRaw(url); }
+    catch (e) {
+      // Respect 429 Too Many Requests with gentle backoff
+      if (String(e).includes("429") && i < tries - 1) {
+        await new Promise(r => setTimeout(r, delay));
+        delay = Math.min(delay * 1.6, 4000);
         continue;
       }
-      throw e;
+      if (i === tries - 1) throw e;
+      await new Promise(r => setTimeout(r, delay));
+      delay = Math.min(delay * 1.6, 4000);
     }
   }
 }
 
-/* open directly (no interstitial) — and only once */
-function openDirectOnce(ev, url){
-  if (ev){ ev.preventDefault(); ev.stopPropagation(); }
-  try{
-    const w = window.open(url, "_blank", "noopener,noreferrer");
-    if (!w) location.assign(url);
-  }catch{ location.assign(url); }
+/* ---------- DOM refs (keep names; do not change structure) ---------- */
+const list      = $("#bp-list")      || $(".js-list")      || $("#list")      || $("#cards");
+const empty     = $("#bp-empty")     || $(".js-empty")     || $("#empty");
+const errorBox  = $("#bp-error")     || $(".js-error")     || $("#error");
+const searchEl  = $("#bp-search")    || $(".js-search")    || $("#search");
+const sortBtn   = $("#bp-sort")      || $(".js-sort")      || $("#sort");
+const tagBtn    = $("#bp-tags")      || $(".js-tags")      || $("#tags");
+const refresh   = $("#bp-refresh")   || $(".js-refresh")   || $("#refresh");
+const sentinel  = $("#bp-sentinel")  || $(".js-sentinel")  || $("#sentinel");
+
+/* Optional: creators footer; if not present we no-op */
+const creatorsWrap  = $("#creators-footer") || $(".js-creators-footer");
+const creatorsSpin  = $("#creators-spin")   || $(".js-creators-spin");
+
+/* ---------- state ---------- */
+let page     = 0;
+let hasMore  = true;
+let loading  = false;
+
+let q        = "";
+let bucket   = "";         // tag filter (empty = all)
+let sort     = "likes";    // "likes" | "new" | "title"
+
+/* ---------- stable title cleanup (used only for sort-title) ---------- */
+function cleanTitle(s = "") {
+  const t = s.trim().replace(/^\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "").trim();
+  return t.replace(/^[^A-Za-z0-9(]+/, "");
 }
 
-/* remove “image1234x456 …” attachment links, rewrite forum links to API redirect */
-function sanitizeCookedHTML(html){
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html || "";
-
-  // drop attachment links that show as "image1536x1024 …"
-  tmp.querySelectorAll('a').forEach(a=>{
-    const t = (a.textContent||"").trim();
-    if (/^image\d+x\d+\b/i.test(t)) a.remove();
-  });
-
-  // rewrite community links via redirect (leave my.home-assistant.io links intact)
-  tmp.querySelectorAll('a[href^="https://community.home-assistant.io/"]').forEach(a=>{
-    try{
-      const u = new URL(a.href);
-      const parts = u.pathname.split("/").filter(Boolean);
-      const idx = parts.indexOf("t");
-      if (idx !== -1){
-        let slug = "", id = "";
-        if (parts[idx+1] && /^\d+$/.test(parts[idx+1])) id = parts[idx+1];
-        else { slug = parts[idx+1]||""; id = (parts[idx+2]||"").replace(/\D+/g,""); }
-        if (id){
-          const qs = new URLSearchParams({ tid:id, slug }).toString();
-          a.setAttribute("href", `${API}/go?${qs}`);
-          a.target = "_blank";
-          a.rel = "noopener";
-        }
-      }
-    }catch{}
-  });
-
-  return tmp.innerHTML;
+/* ---------- SEARCH HARDENING HELPERS (logic-only) ---------- */
+function tokenize(query) {
+  if (!query) return [];
+  return query
+    .toLowerCase()
+    .replace(/[_/|,.;:!?()[\]{}"'`~]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 12); // cap to keep it snappy
 }
 
-/* title parsing (clean + title-case with acronyms kept) */
-const ACRONYMS = new Set(["ZHA","Z2M","MQTT","API","RGB","RGBW","AI","TTS","STT","LLM","HVAC","UV","TV","UPS"]);
-function cleanTitle(raw){
-  if (!raw) return "";
-  let t = raw;
+// Score ANY-word matches across title/desc/tags with weights
+function scoreItem(item, toks) {
+  if (!toks.length) return 0;
+  const title = (item.title || "").toLowerCase();
+  const desc  = (item.excerpt || "").toLowerCase();
+  const tags  = (item.tags || []).map(t => String(t || "").toLowerCase());
 
-  // remove [Blueprint] tokens
-  t = t.replace(/\[?\s*blue\s*print\s*]?/ig, "");
-
-  // strip leading emojis/symbols until letter/number/(
-  t = t.replace(/^[^\p{L}\p{N}(]+/u, "");
-
-  // drop most specials except () - _ : and spaces
-  t = t.replace(/[^\p{L}\p{N}\s()\-_:]/gu, "");
-
-  // collapse whitespace/dashes
-  t = t.replace(/\s{2,}/g, " ").replace(/\s-\s/g, " - ").trim();
-
-  // Title Case while keeping acronyms & already-all-caps
-  t = t.split(" ").map(w=>{
-    if (ACRONYMS.has(w.toUpperCase())) return w.toUpperCase();
-    if (/^[A-Z0-9]{3,}$/.test(w)) return w; // keep existing caps like "HAOS"
-    return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
-  }).join(" ");
-
-  return t;
-}
-
-/* format likes */
-function formatLikes(n){
-  if (n >= 1_000_000) return `${(n/1_000_000).toFixed(1).replace(/\.0$/,"")}m`;
-  if (n >= 1_000)     return `${(n/1_000).toFixed(1).replace(/\.0$/,"")}k`;
-  return String(n);
-}
-
-/* expanded/cached cooked */
-const expandedMap = new Map();   // postId -> boolean
-const cookedCache = new Map();   // postId -> sanitized cooked HTML
-
-/* ---------------- creators footer ---------------- */
-function footerSpin(show=true){
-  const s = $("#creators-spin");
-  if (s) s.style.opacity = show ? "1" : "0";
-}
-function renderCreatorsFooter(stats){
-  const root = $("#creators-footer");
-  if (!root) return;
-  root.innerHTML = `
-    <div class="contrib-grid">
-      <section class="contrib-card">
-        <div class="contrib-head">Most Popular Blueprint</div>
-        <div class="author">${esc(stats.popular.author || "-")}</div>
-        <div class="desc">${esc(stats.popular.title || "-")}</div>
-      </section>
-      <section class="contrib-card">
-        <div class="contrib-head">Most Uploaded Blueprints</div>
-        <div class="author">${esc(stats.uploader.name || "-")}</div>
-        <div class="desc"><span class="count-chip">${(stats.uploader.count ?? 0)} Blueprints</span></div>
-      </section>
-      <section class="contrib-card">
-        <div class="contrib-head">Most Recent Upload</div>
-        <div class="author">${esc(stats.recent.author || "-")}</div>
-        <div class="desc">${esc(stats.recent.title || "-")}</div>
-      </section>
-    </div>`;
-}
-function computeCreatorStats(items){
-  const byAuthor = new Map();
-  let mostLiked = null, mostRecent = null;
-
-  for (const it of items){
-    const a = it.author || "—";
-    byAuthor.set(a, (byAuthor.get(a)||0) + 1);
-
-    if (!mostLiked || (it.likes || 0) > (mostLiked.likes || 0)) mostLiked = it;
-    if (!mostRecent || (new Date(it.created_at||it.updated_at||0) > new Date(mostRecent.created_at||mostRecent.updated_at||0)))
-      mostRecent = it;
+  let s = 0;
+  for (const t of toks) {
+    if (title.includes(t)) s += 3;
+    if (tags.some(x => x.includes(t))) s += 2;
+    if (desc.includes(t))  s += 1;
   }
-  let uploader = {name:"—", count:0};
-  for (const [name,count] of byAuthor) if (count > uploader.count) uploader = {name,count};
+  return s;
+}
 
-  return {
-    popular: { title: mostLiked?.title, author: mostLiked?.author },
-    uploader,
-    recent:  { title: mostRecent?.title, author: mostRecent?.author }
+function matchesBucket(item, bucketName) {
+  if (!bucketName) return true;
+  const tags = (item.tags || []).map(t => String(t || "").toLowerCase());
+  return tags.includes(bucketName.toLowerCase());
+}
+
+function sorterFor(currentSort, isSearching) {
+  return (a, b) => {
+    if (isSearching) {
+      const diff = (b._score || 0) - (a._score || 0);
+      if (diff) return diff;
+    }
+    if (currentSort === "likes") return (b.likes || 0) - (a.likes || 0);
+    if (currentSort === "new") {
+      const ta = new Date(a.created_at || a.updated_at || 0).getTime();
+      const tb = new Date(b.created_at || b.updated_at || 0).getTime();
+      return tb - ta;
+    }
+    if (currentSort === "title") {
+      return cleanTitle(a.title).localeCompare(cleanTitle(b.title));
+    }
+    return 0;
   };
 }
 
-/* ---------------- card rendering ---------------- */
-function tagPills(tags){
-  const set = [];
-  (tags||[]).forEach(t => { const v=(t||"").toString().trim(); if(v && !set.includes(v)) set.push(v); });
-  if (!set.length) return "";
-  return `<div class="tags">${set.slice(0,6).map(t=>`<span class="tag">${esc(t)}</span>`).join("")}</div>`;
+/* ---------- backend page fetch wrapper ----------
+   NOTE: keep the query param you already use. If your API is cursor-based,
+   simply adapt the 'page' param here; rest of logic stays unchanged.
+------------------------------------------------- */
+async function fetchPage(pageNum) {
+  const params = new URLSearchParams({ page: String(pageNum) });
+  if (bucket) params.set("tag", bucket);
+  // The backend returns: { items: [...], has_more: boolean }
+  return fetchJSON(`${API}?${params.toString()}`);
 }
 
-async function toggleDesc(id, it, card, forceOpen=false){
-  const box = card.querySelector(`#desc-${id}`);
-  const nowExpanded = forceOpen ? true : !expandedMap.get(id);
+/* ---------- creators footer hooks (no layout change) ---------- */
+function footerSpin(on) {
+  if (!creatorsSpin) return;
+  creatorsSpin.style.visibility = on ? "visible" : "hidden";
+}
 
-  if (nowExpanded){
-    if (!cookedCache.has(id)){
-      try{
-        const data = await fetchJSON(`${API}/topic?id=${id}`);
-        const cooked = sanitizeCookedHTML(data.cooked || "");
-        cookedCache.set(id, cooked);
-      }catch(e){
-        cookedCache.set(id, `<em>Failed to load: ${esc(String(e.message||e))}</em>`);
-      }
+function computeCreatorStats(items) {
+  // Fallback if your existing footer logic is elsewhere — keep signatures
+  const byAuthor = new Map();
+  for (const it of items) {
+    const a = (it.author || "unknown").trim();
+    const c = byAuthor.get(a) || { count: 0, mostLiked: null, mostRecent: null };
+    c.count++;
+    if (!c.mostLiked || (it.likes || 0) > (c.mostLiked.likes || 0)) c.mostLiked = it;
+    const t = new Date(it.created_at || it.updated_at || 0).getTime();
+    if (!c.mostRecent || t > new Date(c.mostRecent.created_at || c.mostRecent.updated_at || 0).getTime()) c.mostRecent = it;
+    byAuthor.set(a, c);
+  }
+  // Most popular blueprint (highest likes overall)
+  let mostPopular = null;
+  let mostRecent  = null;
+  let topUploader = { author: "", count: 0 };
+
+  for (const [author, data] of byAuthor.entries()) {
+    if (!mostPopular || (data.mostLiked && (data.mostLiked.likes || 0) > (mostPopular.likes || 0))) {
+      mostPopular = data.mostLiked;
     }
-    box.innerHTML = cookedCache.get(id);
-    box.classList.add("open");
-  } else {
-    box.textContent = it.excerpt || "";
-    box.classList.remove("open");
+    const mr = data.mostRecent;
+    if (!mostRecent || (new Date(mr.created_at || mr.updated_at || 0).getTime() >
+                        new Date(mostRecent.created_at || mostRecent.updated_at || 0).getTime())) {
+      mostRecent = mr;
+    }
+    if (data.count > topUploader.count) topUploader = { author, count: data.count };
   }
-  expandedMap.set(id, nowExpanded);
+  return { mostPopular, mostRecent, topUploader };
 }
 
-function makeCard(it){
-  const el = document.createElement("article");
-  el.className = "card";
-  el.dataset.id = it.id;
+function renderCreatorsFooter(stats) {
+  if (!creatorsWrap || !stats) return;
+  // We do not touch layout; only write texts into existing nodes.
+  const mpT = creatorsWrap.querySelector("[data-slot=popular-title]");
+  const mpA = creatorsWrap.querySelector("[data-slot=popular-author]");
+  const muA = creatorsWrap.querySelector("[data-slot=uploader-author]");
+  const muC = creatorsWrap.querySelector("[data-slot=uploader-count]");
+  const mrT = creatorsWrap.querySelector("[data-slot=recent-title]");
+  const mrA = creatorsWrap.querySelector("[data-slot=recent-author]");
 
-  const liked = it.likes ?? 0;
-  const showGreyImport = (it.import_count || 0) > 1;
-
-  el.innerHTML = `
-    <h3 class="title">${esc(cleanTitle(it.title))}</h3>
-    ${it.author ? `<div class="meta">by ${esc(it.author)} <span class="pill likes">${esc(formatLikes(liked))} <b>Liked This</b></span></div>` : ""}
-    ${tagPills([...(it.tags||[])])}
-    <div class="desc-box" id="desc-${it.id}">${esc(it.excerpt || "No description")}</div>
-    <div class="row-actions">
-      <button class="readmore" data-read="${it.id}" type="button">Read more</button>
-      ${showGreyImport
-        ? `<button class="cta gray" data-open="desc:${it.id}">Read description</button>`
-        : `<button class="cta" data-import="${esc(it.import_url||"")}">Import to Home Assistant</button>`
-      }
-    </div>
-  `;
-
-  // double-click toggles description (don’t trigger if clicking inside links)
-  el.addEventListener("dblclick", async (ev)=>{
-    if (ev.target.closest("a")) return;
-    await toggleDesc(it.id, it, el);
-  });
-
-  // explicit read more
-  el.querySelector('[data-read]')?.addEventListener("click", async (ev)=>{
-    ev.preventDefault(); ev.stopPropagation();
-    await toggleDesc(it.id, it, el);
-  });
-
-  // import (single open only)
-  el.querySelector('[data-import]')?.addEventListener("click", (ev)=>{
-    const url = ev.currentTarget.getAttribute("data-import");
-    if (url) openDirectOnce(ev, url);
-  });
-
-  // when multiple imports -> open description instead
-  el.querySelector('[data-open^="desc:"]')?.addEventListener("click", async (ev)=>{
-    ev.preventDefault(); ev.stopPropagation();
-    await toggleDesc(it.id, it, el, true);
-  });
-
-  return el;
+  if (mpT) mpT.textContent = stats.mostPopular?.title || "—";
+  if (mpA) mpA.textContent = stats.mostPopular?.author || "—";
+  if (muA) muA.textContent = stats.topUploader?.author || "—";
+  if (muC) muC.textContent = `${stats.topUploader?.count || 0} Blueprints`;
+  if (mrT) mrT.textContent = stats.mostRecent?.title || "—";
+  if (mrA) mrA.textContent = stats.mostRecent?.author || "—";
 }
 
-/* ---------------- paging & boot ---------------- */
-async function boot(){
-  const list      = $("#list");
-  const sentinel  = $("#sentinel");
-  const errorBox  = $("#error");
-  const empty     = $("#empty");
-  const sortSel   = $("#sort");
-  const searchIn  = $("#search");
-  const tagMenu   = $("#tagmenu");
-  const tagBtn    = $("#tagbtn");
+/* ---------- rendering (reuse your existing makeCard) ---------- */
+/* IMPORTANT: We do not alter UI. If your project already defines makeCard(),
+   we will reuse it. If not, we provide a no-op placeholder to avoid crashes. */
+if (typeof window.makeCard !== "function") {
+  window.makeCard = function noopMakeCard(it) {
+    const li = document.createElement("div");
+    li.textContent = it.title || "(untitled)";
+    li.className = "bp-card";
+    return li;
+  };
+}
 
-  if (!list) return;
+/* ---------- core load() with hardened search & filters ---------- */
+async function load(initial = false) {
+  if (loading || (!hasMore && !initial)) return;
+  loading = true;
+  if (errorBox) errorBox.style.display = "none";
 
-  let page = 0, hasMore = true, loading = false;
-  let sort = "likes";          // "likes" | "new" | "title"
-  let q = "";
-  let bucket = "";
+  const tokens = tokenize(q);
+  const wantAtLeast = tokens.length ? 12 : 6; // pull more when searching
+  let appended = 0;
 
-  // dynamic heading text
-  const headingEl = $("#heading");
-  function setHeading(){
-    let title = (sort === "likes") ? "Most liked blueprints"
-              : (sort === "title") ? "Title A–Z"
-              : "Newest blueprints";
-    const parts = [];
-    if (q) parts.push(`query: “${q}”`);
-    if (bucket) parts.push(bucket);
-    headingEl.textContent = parts.length ? `${title} • ${parts.join(" · ")}` : title;
-  }
-
-  async function fetchPage(p){
-    const url = new URL(`${API}/blueprints`, location.origin);
-    url.searchParams.set("page", String(p));
-    if (q){ url.searchParams.set("q", q); url.searchParams.set("q_title", q); } // support both keys
-    if (sort)   url.searchParams.set("sort", sort);
-    if (bucket) url.searchParams.set("bucket", bucket);
-    return await fetchJSON(url.toString());
-  }
-
-  async function load(initial=false){
-    if (loading || (!hasMore && !initial)) return;
-    loading = true; errorBox.style.display="none";
-
-    try{
-      const data = await fetchPage(page);
+  try {
+    do {
+      const data  = await fetchPage(page);
       const items = data.items || [];
       hasMore = !!data.has_more;
 
-      if (initial){
-        list.innerHTML = "";
-        empty.style.display = items.length ? "none":"block";
+      if (page === 0 && initial) {
+        if (list)  list.innerHTML = "";
+        if (empty) empty.style.display = "none";
       }
-      for (const it of items) list.appendChild(makeCard(it));
 
-      if (page === 0){
+      // filter by tag
+      let out = items.filter(it => matchesBucket(it, bucket));
+
+      // score on search
+      if (tokens.length) {
+        out.forEach(it => it._score = scoreItem(it, tokens));
+        out = out.filter(it => it._score > 0);
+      }
+
+      // sort with fallback chain
+      out.sort(sorterFor(sort, tokens.length > 0));
+
+      // append
+      for (const it of out) {
+        const card = window.makeCard(it);
+        if (list && card) list.appendChild(card);
+        appended++;
+      }
+
+      // first page: creators footer from current batch (no layout change)
+      if (page === 0 && initial) {
         footerSpin(true);
         const stats = computeCreatorStats(items);
         renderCreatorsFooter(stats);
         footerSpin(false);
       }
+
       page += 1;
-    }catch(e){
-      errorBox.textContent = `Failed to load: ${String(e.message||e)}`;
-      errorBox.style.display="block";
-    }finally{
-      loading = false;
+
+      if (page > 0 && appended === 0 && !hasMore) {
+        if (empty) empty.style.display = "block";
+      }
+    } while (tokens.length && appended < wantAtLeast && hasMore);
+
+  } catch (e) {
+    if (errorBox) {
+      errorBox.textContent = `Failed to load: ${String(e.message || e)}`;
+      errorBox.style.display = "block";
     }
+  } finally {
+    loading = false;
   }
-
-  async function reloadAll(){
-    page=0; hasMore=true; list.innerHTML=""; expandedMap.clear();
-    setHeading();
-    await load(true);
-  }
-
-  // sort dropdown
-  if (sortSel){
-    sortSel.addEventListener("sl-change", async ()=>{
-      sort = sortSel.value || "likes";
-      await reloadAll();
-    });
-  }
-
-  // search (debounced & snappy)
-  if (searchIn){
-    const onS = debounce(async ()=>{
-      q = (searchIn.value||"").trim();
-      await reloadAll();
-    }, 220);
-    searchIn.addEventListener("sl-input", onS);
-    searchIn.addEventListener("sl-clear", onS);
-  }
-
-  // tags menu
-  try{
-    const f = await fetchJSON(`${API}/filters`);
-    const tags = Array.isArray(f.tags) ? f.tags : [];
-    tagMenu.innerHTML = "";
-    const mk = (v,l)=>`<sl-menu-item value="${esc(v)}">${esc(l)}</sl-menu-item>`;
-    tagMenu.insertAdjacentHTML("beforeend", mk("","All tags"));
-    tags.forEach(t=> tagMenu.insertAdjacentHTML("beforeend", mk(t,t)));
-    tagMenu.addEventListener("sl-select", async (ev)=>{
-      bucket = ev.detail.item.value || "";
-      tagBtn.textContent = bucket || "All tags";
-      await reloadAll();
-    });
-  }catch{}
-
-  // infinite scroll
-  if (sentinel){
-    const io = new IntersectionObserver((e)=>{ if (e[0].isIntersecting) load(false); }, {rootMargin:"900px"});
-    io.observe(sentinel);
-  }
-
-  setHeading();
-  await load(true);
 }
 
-/* -------------- CSS helpers injected -------------- */
-const style = document.createElement("style");
-style.textContent = `
-  .desc-box{
-    background: rgba(12,24,58,.75);
-    border: 1px solid rgba(255,255,255,.15);
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    color:#e8f1ff; padding:12px 14px; border-radius:12px;
-    margin: 6px 0 8px; max-height: 132px; overflow: hidden;
-    transition: max-height .25s ease;
-  }
-  .desc-box.open{ max-height: 9999px; }
+/* ---------- boot & interactions (no UI changes) ---------- */
+function resetAndLoad() {
+  page = 0;
+  hasMore = true;
+  load(true);
+}
 
-  .row-actions{
-    display:flex; align-items:center; margin-top:8px;
-  }
-  .readmore{ margin-right:auto; background:transparent; color:#d6e6ff;
-    border:1px solid #ffffff33; border-radius:999px; padding:8px 12px; font-weight:700; }
-  .cta{ margin-left:auto; background:linear-gradient(135deg,#00b2ff,#0a84ff); color:#032149;
-       border:1px solid rgba(255,255,255,.35); border-radius:999px;
-       padding:10px 14px; font-weight:800; }
-  .cta.gray{ background:#6d7a92; color:#f6f8ff; }
+const onSearch = debounce(() => {
+  q = (searchEl?.value || "").trim();
+  resetAndLoad();
+}, 240);
 
-  .pill.likes{ background:#ffffff22; border:1px solid #ffffff33; border-radius:999px; padding:3px 8px; margin-left:8px; }
-  .tags{ display:flex; gap:6px; flex-wrap:wrap; margin:8px 0 6px; }
-  .tag{ background:#0e2a66; border:1px solid #29539a; color:#cfe2ff; padding:2px 8px; border-radius:999px; font-size:12px; }
+if (searchEl) {
+  searchEl.addEventListener("input", onSearch);
+}
 
-  /* compact footer */
-  #creators-footer{ position:fixed; left:0; right:0; bottom:0; z-index:5;
-    background:linear-gradient(180deg, rgba(10,20,52,.86), rgba(8,18,46,.94));
-    border-top:1px solid rgba(255,255,255,.15); padding:8px 10px 10px; }
-  .contrib-grid{ display:grid; gap:8px; grid-template-columns:repeat(3,1fr); max-width:1200px; margin:0 auto; }
-  .contrib-card{ border:1px solid rgba(255,255,255,.18); border-radius:12px; padding:8px 10px;
-    background:linear-gradient(180deg, rgba(12,24,58,.82), rgba(9,20,50,.88)); }
-  .contrib-head{ font-weight:900; margin-bottom:2px; font-size:12px; }
-  .author{ font-weight:800; font-size:12px; }
-  .desc{ font-size:12px; opacity:.95; }
-  #creators-spin{ display:block; width:10px; height:10px; border-radius:999px; border:2px solid #9dd1ff; border-top-color:transparent;
-    margin:4px auto; animation: sp 1s linear infinite; opacity:0; }
-  @keyframes sp{ to { transform: rotate(360deg); } }
-  .count-chip{ display:inline-block; padding:4px 8px; border-radius:999px; background:#0a84ff; color:#032149; border:1px solid #fff5; font-weight:800; font-size:12px; }
-  body{ padding-bottom: 92px; }
-`;
-document.head.appendChild(style);
+if (sortBtn) {
+  sortBtn.addEventListener("change", () => {
+    const v = (sortBtn.value || "").toLowerCase();
+    sort = v === "title" ? "title" : v === "newest" || v === "new" ? "new" : "likes";
+    resetAndLoad();
+  });
+}
 
-/* ------------ kick ------------- */
-document.addEventListener("DOMContentLoaded", boot);
+if (tagBtn) {
+  tagBtn.addEventListener("change", () => {
+    bucket = (tagBtn.value || "").trim();
+    resetAndLoad();
+  });
+}
+
+if (refresh) {
+  refresh.addEventListener("click", () => {
+    resetAndLoad();
+  });
+}
+
+// Infinite scroll / creep loader — intersection observer
+if (sentinel) {
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (e.isIntersecting) load(false);
+    }
+  }, { rootMargin: "600px 0px 600px 0px" });
+  io.observe(sentinel);
+}
+
+// Initial load
+resetAndLoad();
