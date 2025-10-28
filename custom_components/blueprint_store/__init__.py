@@ -1,16 +1,11 @@
-# custom_components/blueprint_store/__init__.py
 from __future__ import annotations
-from typing import Any, Tuple, List
 
+import os
 from aiohttp import web
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.components.http import HomeAssistantView
-from homeassistant.components.frontend import (
-    async_register_built_in_panel,
-    async_remove_panel,
-)
-from homeassistant.components import frontend
+from homeassistant.components.frontend import async_register_built_in_panel, async_remove_panel
 
 from .const import (
     DOMAIN,
@@ -30,12 +25,12 @@ from .db import (
 )
 from .coordinator import BlueprintStoreCoordinator
 
-PLATFORMS: list = []
+PLATFORMS: list[str] = []
 DATA_DB_PATH = "db_path"
 DATA_COORD = "coordinator"
 
 
-# ========================= HTTP API VIEWS =========================
+# ------------------------------ API: list/query ------------------------------
 class BlueprintsAPI(HomeAssistantView):
     url = "/api/blueprint_store/blueprints"
     name = "api:blueprint_store:blueprints"
@@ -45,8 +40,8 @@ class BlueprintsAPI(HomeAssistantView):
         hass: HomeAssistant = request.app["hass"]
         db_path: str = hass.data[DOMAIN][DATA_DB_PATH]
 
-        q = request.query.get("q") or request.query.get("q_title") or ""
-        bucket = request.query.get("bucket") or request.query.get("tag") or ""
+        q = (request.query.get("q") or request.query.get("q_title") or "").strip()
+        bucket = (request.query.get("bucket") or request.query.get("tag") or "").strip()
         sort = (request.query.get("sort") or "likes").lower()
 
         try:
@@ -81,7 +76,7 @@ class TopicAPI(HomeAssistantView):
     requires_auth = True
 
     async def get(self, request: web.Request) -> web.Response:
-        from . import discourse  # local import to keep module import light
+        from . import discourse  # lazy import
 
         hass: HomeAssistant = request.app["hass"]
         db_path: str = hass.data[DOMAIN][DATA_DB_PATH]
@@ -96,15 +91,11 @@ class TopicAPI(HomeAssistantView):
         if cooked:
             return self.json({"cooked": cooked})
 
-        # Fallback: live fetch, then persist
-        try:
-            detail = await discourse.fetch_topic_detail(hass, tid)
-            await async_set_cooked(
-                hass, db_path, tid, detail.get("cooked_html") or "", detail.get("desc_text") or ""
-            )
-            return self.json({"cooked": detail.get("cooked_html") or ""})
-        except Exception as e:  # noqa: BLE001
-            return web.json_response({"error": str(e)}, status=502)
+        detail = await discourse.fetch_topic_detail(hass, tid)
+        await async_set_cooked(
+            hass, db_path, tid, detail.get("cooked_html") or "", detail.get("desc_text") or ""
+        )
+        return self.json({"cooked": detail.get("cooked_html") or ""})
 
 
 class GoAPI(HomeAssistantView):
@@ -117,47 +108,73 @@ class GoAPI(HomeAssistantView):
         slug = request.query.get("slug") or ""
         if not tid:
             return web.Response(status=400, text="missing tid")
-        if slug:
-            url = f"{DISCOURSE_BASE}/t/{slug}/{tid}"
-        else:
-            url = f"{DISCOURSE_BASE}/t/{tid}"
+        url = f"{DISCOURSE_BASE}/t/{slug}/{tid}" if slug else f"{DISCOURSE_BASE}/t/{tid}"
         raise web.HTTPFound(url)
 
 
-# ========================= PANEL & STATIC =========================
+# ------------------------------ Panel HTML (no 404) ------------------------------
+class PanelView(HomeAssistantView):
+    """Serve the UI HTML; stream your real panel file if it exists, else a tiny fallback."""
+
+    url = "/api/blueprint_store/panel"
+    name = "api:blueprint_store:panel"
+    requires_auth = True
+
+    async def get(self, request: web.Request) -> web.Response:
+        hass: HomeAssistant = request.app["hass"]
+        static_dir = hass.config.path(f"custom_components/{DOMAIN}/{STATIC_DIR_NAME}")
+        index_path = os.path.join(static_dir, INDEX_RELATIVE)
+
+        if os.path.exists(index_path):
+            try:
+                with open(index_path, "r", encoding="utf-8") as fh:
+                    html = fh.read()
+                return web.Response(text=html, content_type="text/html")
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Fallback – avoids the 404 "Not Found" screen.
+        html = """<!doctype html><html><head><meta charset="utf-8">
+<title>Blueprint Store</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{margin:0;background:#0b1e3a;color:#eef;font:14px/1.45 system-ui,Segoe UI,Roboto}
+.wrap{max-width:1060px;margin:40px auto;padding:24px;border-radius:14px;background:#0f2548}
+a{color:#7ec8ff}</style></head>
+<body><div class="wrap">
+<h2>Blueprint Store</h2>
+<p>The panel file <code>{static}</code> was not found. If you already ship a UI, create it at that path.
+Otherwise the API is live at <code>/api/blueprint_store/…</code>.</p>
+</div></body></html>""".format(static=f"custom_components/{DOMAIN}/{STATIC_DIR_NAME}/{INDEX_RELATIVE}")
+        return web.Response(text=html, content_type="text/html")
+
+
+# ------------------------------ Static + Panel ------------------------------
 async def _register_static_and_panel(hass: HomeAssistant) -> None:
-    """Serve /blueprint_store_static and add a sidebar panel via built-in iframe panel."""
-    # Static
     static_dir = hass.config.path(f"custom_components/{DOMAIN}/{STATIC_DIR_NAME}")
-    http = hass.http
+    # Serve static bundle (if present)
+    if hasattr(hass.http, "register_static_paths"):
+        hass.http.register_static_paths([web.StaticResource(STATIC_URL_PATH, static_dir)])
+    else:
+        hass.http.register_static_path(STATIC_URL_PATH, static_dir, cache_duration=86400)
 
-    # Newer HA: register_static_paths(list[web.StaticResource])
-    if hasattr(http, "register_static_paths"):
-        http.register_static_paths([web.StaticResource(STATIC_URL_PATH, static_dir)])
-    # Older HA: register_static_path(path, directory, cache_duration=...)
-    elif hasattr(http, "register_static_path"):
-        http.register_static_path(STATIC_URL_PATH, static_dir, cache_duration=86400)
-
-    # Remove any stale panel (callable is sync despite its name)
+    # Always register the panel (iframe to our PanelView URL)
     try:
-        async_remove_panel(hass, PANEL_URL_PATH)
+        async_remove_panel(hass, PANEL_URL_PATH)  # safe if missing
     except Exception:
         pass
 
-    # Register a built-in iframe panel (function is sync; DO NOT await)
     async_register_built_in_panel(
         hass,
         component_name="iframe",
         sidebar_title="Blueprint Store",
         sidebar_icon="mdi:storefront-outline",
         frontend_url_path=PANEL_URL_PATH,
-        config={"url": f"{STATIC_URL_PATH}/{INDEX_RELATIVE}"},
+        config={"url": "/api/blueprint_store/panel"},
         require_admin=False,
         update=True,
     )
 
 
-# ========================= SETUP / UNLOAD =========================
+# ------------------------------ Setup / Unload ------------------------------
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
@@ -174,6 +191,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.http.register_view(FiltersAPI)
     hass.http.register_view(TopicAPI)
     hass.http.register_view(GoAPI)
+    hass.http.register_view(PanelView)
 
     # Static + panel
     await _register_static_and_panel(hass)
@@ -188,7 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     try:
-        async_remove_panel(hass, PANEL_URL_PATH)  # sync callable
+        async_remove_panel(hass, PANEL_URL_PATH)
     except Exception:
         pass
     return True
