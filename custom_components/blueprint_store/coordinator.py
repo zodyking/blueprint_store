@@ -1,34 +1,61 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import logging
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from datetime import timedelta
+from pathlib import Path
+from typing import Any, Dict
 
-from .const import DOMAIN
-from .db import async_refresh_if_due
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+
+from .const import DOMAIN, DB_FILENAME, REFRESH_INTERVAL_SECS
+# Import the module, not a symbol, to avoid ImportError on partially-loaded modules
+from . import db as dbmod
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class BlueprintStoreCoordinator(DataUpdateCoordinator):
-    """Refresh the SQLite cache on a schedule / first load."""
+class BlueprintStoreCoordinator(DataUpdateCoordinator[Dict[str, Any]]):
+    """Coordinates background upkeep of the local Blueprint Store database."""
 
-    def __init__(self, hass: HomeAssistant, db_path: str) -> None:
+    def __init__(self, hass: HomeAssistant, db_path: str | None = None) -> None:
+        self.hass = hass
+        # Default DB location (inside HA config dir)
+        self.db_path = db_path or str(Path(hass.config.path(DB_FILENAME)))
+
         super().__init__(
             hass,
             _LOGGER,
             name=f"{DOMAIN}_coordinator",
-            update_interval=None,  # we call refresh explicitly / in db layer
+            update_interval=timedelta(seconds=int(REFRESH_INTERVAL_SECS)),
         )
-        self.db_path = db_path
 
-    async def _async_update_data(self):
+    async def _async_update_data(self) -> Dict[str, Any]:
+        """Periodic tick. Ensure DB exists and open a refresh window if due.
+
+        Actual scraping/upserting is performed elsewhere (API view / task),
+        so this coordinator only handles gating and health.
+        """
+        # Ensure the DB schema exists
+        await self.hass.async_add_executor_job(dbmod.ensure_db, self.db_path)
+
+        # Handle possible stale module cache gracefully
         try:
-            await async_refresh_if_due(self.hass, self.db_path)
-            return True
-        except Exception as err:  # noqa: BLE001
-            raise UpdateFailed(str(err)) from err
+            refresh_due = await dbmod.async_refresh_if_due(self.hass, self.db_path)
+        except AttributeError:
+            # If a stale db.py was cached during a reload, force a reload once.
+            from importlib import reload
 
-    async def async_config_entry_first_refresh(self) -> None:
-        """Run one refresh during setup, without waiting for scheduler."""
-        await self._async_update_data()
+            _LOGGER.debug("Reloading db module after AttributeError on import")
+            reload(dbmod)
+            refresh_due = await dbmod.async_refresh_if_due(self.hass, self.db_path)
+
+        if refresh_due:
+            _LOGGER.debug(
+                "Refresh window is open for %s; fetcher/upserter will run separately.",
+                DOMAIN,
+            )
+
+        # Return an empty payload; consumers query the DB directly via your views
+        return {}
