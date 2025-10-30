@@ -1,56 +1,96 @@
+# custom_components/blueprint_store/const.py
 """Constants for the Blueprint Store integration."""
 
-from __future__ import annotations
-
-from datetime import timedelta
-
-# --- Core ---
+# ---- Core domain & storage keys ----
 DOMAIN = "blueprint_store"
-NAME = "Blueprint Store"
-MANUFACTURER = "Blueprint Store"
+DATA_COORDINATOR = f"{DOMAIN}_coordinator"
+DATA_LOADED = f"{DOMAIN}_loaded"
 
-# Panel (uses built-in MDI icon name; does not require any static asset)
+# ---- Sidebar panel (frontend) ----
+# URL slug that appears in the sidebar (e.g., /blueprint_store)
 PANEL_URL_PATH = "blueprint_store"
+# Displayed title in the sidebar
 PANEL_TITLE = "Blueprint Store"
-PANEL_ICON = "mdi:shopping-outline"  # uses HA's built-in icon set
+# Use a built-in Material Design Icon available in Home Assistant
+# (avoid external files to reduce setup friction)
+PANEL_ICON = "mdi:storefront-outline"
 
-# --- Options / Config keys ---
+# Static path (served by HA) for images/etc.
+# Your repo stores branding at:
+# custom_components/blueprint_store/images/...
+# We’ll mount that directory at the URL path below.
+STATIC_URL_PATH = "/blueprint_store_static"
+IMAGES_DIRNAME = "images"  # joined in __init__.py to the component folder
+
+# Panel filenames (kept here so __init__.py can import cleanly)
+PANEL_DIRNAME = "panel"
+PANEL_INDEX_FILE = "index.html"
+PANEL_APP_BUNDLE = "app.js"
+
+# ---- REST API base (served by integration views) ----
+API_BASE = f"/api/{DOMAIN}"
+API_BP_LIST = f"{API_BASE}/blueprints"
+API_BP_TOPIC = f"{API_BASE}/topic"
+API_FILTERS = f"{API_BASE}/filters"
+API_REDIRECT = f"{API_BASE}/go"
+
+# ---- Config Flow / Options ----
+# Keys
+CONF_SCAN_INTERVAL_MIN = "scan_interval_min"
 CONF_MAX_PAGES = "max_pages"
-CONF_UPDATE_MINUTES = "update_minutes"
-CONF_SEARCH_SOURCE = "search_source"          # "live" | "db"
-CONF_ENABLE_CREATOR_SPOTLIGHT = "enable_creator_spotlight"
-CONF_TAG_THRESHOLD = "tag_threshold"          # int: how many tag keywords must match
-CONF_DB_REFRESH_MINUTES = "db_refresh_minutes"
-CONF_DB_PRUNE_DAYS = "db_prune_days"
+CONF_CACHE_TTL_MIN = "cache_ttl_min"
+CONF_ENABLE_SPOTLIGHT = "enable_spotlight"
+CONF_SORT_DEFAULT = "sort_default"          # "new" | "likes" | "title"
 
-# Valid values for CONF_SEARCH_SOURCE
-SEARCH_SOURCE_LIVE = "live"
-SEARCH_SOURCE_DB = "db"
+# Sensible defaults (kept conservative to avoid rate limiting)
+DEFAULT_SCAN_INTERVAL_MIN = 30              # how often to refresh cache (minutes)
+DEFAULT_MAX_PAGES = 4                       # how many forum pages to crawl per refresh
+DEFAULT_CACHE_TTL_MIN = 30                  # in-memory cache TTL (minutes)
+DEFAULT_ENABLE_SPOTLIGHT = True             # show Creator Spotlight section
+DEFAULT_SORT_DEFAULT = "new"                # initial sort mode
 
-# Reasonable defaults used by config_flow and __init__ if option is missing.
-DEFAULT_OPTIONS: dict = {
-    CONF_MAX_PAGES: 6,                        # how many forum pages to walk per query
-    CONF_UPDATE_MINUTES: 30,                  # live crawl backoff / cache window
-    CONF_SEARCH_SOURCE: SEARCH_SOURCE_LIVE,   # keep current behavior unless you switch to sqlite
-    CONF_ENABLE_CREATOR_SPOTLIGHT: True,
-    CONF_TAG_THRESHOLD: 3,                    # require >=3 tag terms to classify
-    CONF_DB_REFRESH_MINUTES: 30,              # if/when DB mode is enabled
-    CONF_DB_PRUNE_DAYS: 90,                   # keep ~3 months of rows
+# Some flows expect a mapping they can import directly.
+DEFAULT_OPTIONS = {
+    CONF_SCAN_INTERVAL_MIN: DEFAULT_SCAN_INTERVAL_MIN,
+    CONF_MAX_PAGES: DEFAULT_MAX_PAGES,
+    CONF_CACHE_TTL_MIN: DEFAULT_CACHE_TTL_MIN,
+    CONF_ENABLE_SPOTLIGHT: DEFAULT_ENABLE_SPOTLIGHT,
+    CONF_SORT_DEFAULT: DEFAULT_SORT_DEFAULT,
 }
 
-# Helper: convert minutes defaults to timedeltas where needed
-DEFAULT_UPDATE_INTERVAL = timedelta(minutes=DEFAULT_OPTIONS[CONF_UPDATE_MINUTES])
-DEFAULT_DB_REFRESH_INTERVAL = timedelta(minutes=DEFAULT_OPTIONS[CONF_DB_REFRESH_MINUTES])
+# ---- Misc keys used across modules (keep names stable) ----
+ATTR_ID = "id"
+ATTR_TITLE = "title"
+ATTR_SLUG = "slug"
+ATTR_AUTHOR = "author"
+ATTR_EXCERPT = "excerpt"
+ATTR_TAGS = "tags"
+ATTR_BUCKET = "bucket"
+ATTR_IMPORT_URL = "import_url"
+ATTR_LIKES = "likes"
+ATTR_VIEWS = "views"
+ATTR_REPLIES = "replies"
+ATTR_USES = "uses"  # if you compute “install count” heuristics
+ATTR_CREATED_AT = "created_at"
+ATTR_UPDATED_AT = "updated_at"
 
-# Web endpoints your panel JS calls (keep in sync with your view routes)
-API_BASE = f"/api/{DOMAIN}"
-API_BLUEPRINTS = f"{API_BASE}/blueprints"
-API_FILTERS = f"{API_BASE}/filters"
-API_TOPIC = f"{API_BASE}/topic"
-API_GO = f"{API_BASE}/go"
+# Sorting modes accepted by the frontend (drop-down)
+SORT_NEW = "new"
+SORT_LIKES = "likes"
+SORT_TITLE = "title"
+VALID_SORTS = {SORT_NEW, SORT_LIKES, SORT_TITLE}
 
-# Keys your panel expects in each item (kept here for reference)
-ITEM_KEYS = (
-    "id", "slug", "title", "author", "excerpt",
-    "import_url", "tags", "bucket", "likes", "views", "replies", "uses"
-)
+# Query param names (so views and UI can share a contract)
+QP_PAGE = "page"
+QP_Q_TITLE = "q_title"
+QP_Q_TEXT = "q_text"
+QP_SORT = "sort"
+QP_BUCKET = "bucket"
+
+# Retry/backoff defaults for forum requests (UI may show 429s otherwise)
+HTTP_RETRY_BASE_MS = 600
+HTTP_RETRY_MAX_TRIES = 3
+
+# Keys for hass.data scoping
+DATA_HTTP_SESSION = f"{DOMAIN}_http_session"
+DATA_STATIC_MOUNTED = f"{DOMAIN}_static_mounted"
