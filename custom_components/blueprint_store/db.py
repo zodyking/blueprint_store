@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from typing import Iterable, List, Dict, Any, Optional, Tuple
 
+# Fallback if const isn’t importable yet during early reloads
 try:
     from .const import REFRESH_INTERVAL_SECS  # type: ignore
 except Exception:
@@ -22,20 +23,20 @@ DB_PRAGMA = [
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS posts (
-    id              INTEGER PRIMARY KEY,
-    title           TEXT NOT NULL,
-    title_norm      TEXT NOT NULL,
-    author          TEXT NOT NULL,
-    likes           INTEGER NOT NULL DEFAULT 0,
-    views           INTEGER NOT NULL DEFAULT 0,
-    replies         INTEGER NOT NULL DEFAULT 0,
-    tags            TEXT NOT NULL DEFAULT '',
-    category        TEXT NOT NULL DEFAULT '',
-    created_at      INTEGER NOT NULL,
-    updated_at      INTEGER NOT NULL,
-    import_url      TEXT NOT NULL DEFAULT '',
-    permalink       TEXT NOT NULL DEFAULT '',
-    description     TEXT NOT NULL DEFAULT '',
+    id               INTEGER PRIMARY KEY,
+    title            TEXT NOT NULL,
+    title_norm       TEXT NOT NULL,
+    author           TEXT NOT NULL,
+    likes            INTEGER NOT NULL DEFAULT 0,
+    views            INTEGER NOT NULL DEFAULT 0,
+    replies          INTEGER NOT NULL DEFAULT 0,
+    tags             TEXT NOT NULL DEFAULT '',
+    category         TEXT NOT NULL DEFAULT '',
+    created_at       INTEGER NOT NULL,
+    updated_at       INTEGER NOT NULL,
+    import_url       TEXT NOT NULL DEFAULT '',
+    permalink        TEXT NOT NULL DEFAULT '',
+    description      TEXT NOT NULL DEFAULT '',
     has_multi_import INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_posts_updated ON posts(updated_at DESC);
@@ -48,6 +49,8 @@ CREATE TABLE IF NOT EXISTS meta (
     value TEXT
 );
 """
+
+# ----------------- core helpers -----------------
 
 def open_db(db_path: str) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -67,8 +70,17 @@ def ensure_db(db_path: str) -> None:
     finally:
         conn.close()
 
-# Back-compat alias
+# Back-compat alias some modules might still use
 init_db = ensure_db
+
+# Async wrappers Home Assistant can call safely
+async def async_init_db(hass, db_path: str) -> None:
+    """Create DB/schema on executor thread."""
+    def _inner():
+        ensure_db(db_path)
+    await hass.async_add_executor_job(_inner)
+
+# ----------------- upsert & queries -----------------
 
 def _norm_text(s: str) -> str:
     s = (s or "").strip().replace("\u00A0", " ")
@@ -198,17 +210,22 @@ async def async_query_posts(hass, db_path: str, **kwargs) -> List[Dict[str, Any]
             conn.close()
     return await hass.async_add_executor_job(_inner)
 
+# ----------------- spotlight -----------------
+
 def get_spotlight(conn: sqlite3.Connection) -> Dict[str, Any]:
     cur = conn.cursor()
     cur.execute("SELECT title, author, likes FROM posts ORDER BY likes DESC, views DESC LIMIT 1")
     pop = dict(cur.fetchone() or {"title": "", "author": "", "likes": 0})
+
     cur.execute("SELECT author, COUNT(*) as cnt FROM posts GROUP BY author ORDER BY cnt DESC LIMIT 1")
     mu = cur.fetchone()
     most_uploaded = {"author": "", "count": 0}
     if mu:
         most_uploaded = {"author": mu["author"], "count": mu["cnt"]}
+
     cur.execute("SELECT title, author, updated_at FROM posts ORDER BY updated_at DESC LIMIT 1")
     rec = dict(cur.fetchone() or {"title": "", "author": "", "updated_at": 0})
+
     return {"most_popular": pop, "most_uploaded": most_uploaded, "most_recent": rec}
 
 async def async_get_spotlight(hass, db_path: str) -> Dict[str, Any]:
@@ -220,7 +237,7 @@ async def async_get_spotlight(hass, db_path: str) -> Dict[str, Any]:
             conn.close()
     return await hass.async_add_executor_job(_inner)
 
-# --- refresh gate ---
+# ----------------- refresh gate -----------------
 
 def _meta_get(conn: sqlite3.Connection, key: str) -> Optional[str]:
     cur = conn.cursor()
@@ -238,6 +255,7 @@ def _meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
     conn.commit()
 
 async def async_refresh_if_due(hass, db_path: str, *, force: bool = False) -> bool:
+    """Return True if refresh window is opened; also updates last_refresh_ts."""
     def _inner() -> bool:
         ensure_db(db_path)
         conn = open_db(db_path)
@@ -256,6 +274,7 @@ __all__ = [
     "open_db",
     "ensure_db",
     "init_db",
+    "async_init_db",
     "upsert_posts",
     "async_upsert_posts",
     "query_posts",
